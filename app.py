@@ -48,7 +48,6 @@ with tab1:
         st.markdown("---")
         st.markdown("##### 📌 勾選待做事項")
         
-        # 重新編排版面，加入 NG、Foley 與 其他
         chk_col1, chk_col2, chk_col3 = st.columns(3)
         selected_tasks = []
         
@@ -63,18 +62,26 @@ with tab1:
             if st.checkbox("病解"): selected_tasks.append("病解")
             if st.checkbox("NG"): selected_tasks.append("NG")
         with chk_col3:
-            if st.checkbox("on cath"): selected_tasks.append("on cath")
+            # 將 on cath 改為變數，以便下方做連動展開
+            on_cath_check = st.checkbox("on cath")
             if st.checkbox("Foley"): selected_tasks.append("Foley")
-            # 「其他」改為變數，方便下方判斷是否展開輸入框
             other_check = st.checkbox("其他")
             
+        st.markdown(" ")
+        
+        # 展開「on cath」的細節選項
+        remove_old_cath = False
+        old_cath_location = ""
+        if on_cath_check:
+            remove_old_cath = st.checkbox("🔄 是否移除原 cath？")
+            if remove_old_cath:
+                old_cath_location = st.text_input("輸入原 cath 位置", placeholder="例如: 左手背、右前臂...")
+
         # 展開「其他」的輸入框
         other_text = ""
         if other_check:
             other_text = st.text_input("輸入其他待做事項", placeholder="例如: 觀察過敏反應、紀錄 I/O...")
             
-        st.markdown(" ")
-        
         # 抽血專區
         blood_draw = st.checkbox("💉 抽血")
         blood_tests = ""
@@ -92,6 +99,17 @@ with tab1:
         time_str = st.text_input("設定執行時間 (輸入4碼數字，例如: 0312 或 1530)", max_chars=4, placeholder="0312")
 
         if st.button("新增提醒", use_container_width=True, type="primary"):
+            
+            # 處理 on cath 的字串邏輯
+            if on_cath_check:
+                if remove_old_cath:
+                    if old_cath_location.strip() == "":
+                        selected_tasks.append("on cath (需移除原cath)")
+                    else:
+                        selected_tasks.append(f"on cath (移除原cath: {old_cath_location})")
+                else:
+                    selected_tasks.append("on cath")
+
             # 處理各種需要自行輸入文字的選項
             if other_check:
                 if other_text.strip() == "":
