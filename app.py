@@ -21,7 +21,7 @@ with st.sidebar:
     st.info("💡 **資料隱私**\n\n本系統為便利交班之輔助工具，請盡量以「床號」代替病患全名，切勿輸入身分證字號等敏感個資，以符合 HIPAA 及相關隱私法規。")
     st.markdown("---")
     st.markdown("##### 👨‍⚕️ 系統資訊")
-    st.markdown("© 2026 Developed by **急診護理師 吳智弘** \n*(Hualien TzuChi ER)*")
+    st.markdown("© 2026 Developed by **Alex** \n*(Hualien Tzu Chi ER)*")
     st.caption("All Rights Reserved. 僅供單位內部輔助使用，未經授權請勿作商業用途。")
 
 # ==========================================
@@ -55,7 +55,7 @@ def get_next_iso_time(base_time, freq):
     return next_time
 
 # ==========================================
-# 床位與分區設定字典
+# 床位與分區設定字典 (完全依照您的規格)
 # ==========================================
 BED_MAP = {
     "第三診間區": ["5", "6", "39"] + [str(i) for i in range(27, 34)],
@@ -69,7 +69,7 @@ BED_MAP = {
 }
 
 # ==========================================
-# 資料庫 (JSON 讀寫功能)
+# 資料庫 (JSON 讀寫功能 - 加入 area 屬性防呆)
 # ==========================================
 def load_tasks():
     if not os.path.exists(DATA_FILE): return []
@@ -81,6 +81,7 @@ def load_tasks():
                 if d.get('actual_time'):
                     d['actual_time'] = datetime.datetime.fromisoformat(d['actual_time'])
                 if 'freq' not in d: d['freq'] = '單次'
+                if 'area' not in d: d['area'] = '舊版資料' # 相容舊資料
             return data
     except:
         return []
@@ -123,10 +124,12 @@ with tab1:
         area = st.selectbox("選擇分區", list(BED_MAP.keys()))
         if area == "FRee (自行輸入)":
             bed_num = st.text_input("輸入名稱/床號", placeholder="例如: 走廊 王大明")
-            full_bed_name = f"FRee {bed_num}" if bed_num else ""
+            # 格式化顯示名稱
+            full_bed_name = f"【FRee】{bed_num}" if bed_num else ""
         else:
             bed_select = st.selectbox("選擇床號", BED_MAP[area])
-            full_bed_name = f"{area} {bed_select}"
+            # 格式化顯示名稱，例如 【OBS 1】35床
+            full_bed_name = f"【{area}】{bed_select}床"
 
         st.markdown("---")
         st.markdown("##### 📌 勾選待做事項")
@@ -194,7 +197,7 @@ with tab1:
             if wound_care and wound_details.strip(): selected_tasks.append(f"傷口護理({wound_details})")
             elif wound_care: selected_tasks.append("傷口護理")
 
-            if not full_bed_name.strip() or full_bed_name == "FRee ":
+            if not full_bed_name.strip() or full_bed_name == "【FRee】":
                 st.error("⚠️ 請填寫或選擇床號！")
             elif not selected_tasks:
                 st.error("⚠️ 請至少勾選一項待做事項！")
@@ -214,6 +217,7 @@ with tab1:
                     current_tasks = load_tasks()
                     current_tasks.append({
                         "id": str(uuid.uuid4()),
+                        "area": area,           # 精準記憶所屬區域，後續過濾不怕文字重疊
                         "bed": full_bed_name,
                         "task": task_str,
                         "target_time": target_dt,
@@ -232,15 +236,24 @@ with tab1:
         
         filt_col1, filt_col2 = st.columns(2)
         with filt_col1:
-            filter_zones = st.multiselect("📍 依區域過濾", list(BED_MAP.keys()), placeholder="全區顯示")
+            # 將區域過濾改為單選，並加入「大區塊」選項
+            zone_options = ["全區顯示", "🏥 診間全區", "🛏️ OBS全區"] + list(BED_MAP.keys())
+            filter_zone = st.selectbox("📍 依區域過濾", zone_options)
         with filt_col2:
             filter_tasks = st.multiselect("🩺 依項目過濾", ["抽血", "測血糖", "EKG", "on cath", "傷口護理", "給藥"], placeholder="顯示全部項目")
 
         now_tw = datetime.datetime.now(tw_tz)
         active_tasks = [t for t in st.session_state.tasks if t["status"] == "pending"]
 
-        if filter_zones:
-            active_tasks = [t for t in active_tasks if any(t['bed'].startswith(z) for z in filter_zones)]
+        # --- 應用精準的大區塊過濾邏輯 ---
+        if filter_zone == "🏥 診間全區":
+            active_tasks = [t for t in active_tasks if "診間" in t.get('area', '')]
+        elif filter_zone == "🛏️ OBS全區":
+            active_tasks = [t for t in active_tasks if "OBS" in t.get('area', '')]
+        elif filter_zone != "全區顯示":
+            # 精確比對區域名稱，杜絕 OBS 3 掃到 OBS 35 的問題
+            active_tasks = [t for t in active_tasks if t.get('area') == filter_zone]
+
         if filter_tasks:
             active_tasks = [t for t in active_tasks if any(kw in t['task'] for kw in filter_tasks)]
 
@@ -260,10 +273,10 @@ with tab1:
                     task_col1, task_col2 = st.columns([3.5, 1.5])
                     
                     with task_col1:
-                        display_text = f"【{task['bed']}】 - {task['task']}{freq_badge}\n\n🕒 設定: {task['target_time'].strftime('%H:%M')}"
+                        display_text = f"📍 **{task['bed']}** - {task['task']}{freq_badge}\n\n🕒 設定: {task['target_time'].strftime('%H:%M')}"
                         
                         if diff_mins > 30:
-                            st.markdown(f"⚪ **尚未到期** (剩餘 {int(diff_mins)} 分)<br>【{task['bed']}】 - {task['task']}{freq_badge}<br>🕒 設定: {task['target_time'].strftime('%H:%M')}", unsafe_allow_html=True)
+                            st.markdown(f"⚪ **尚未到期** (剩餘 {int(diff_mins)} 分)<br>📍 **{task['bed']}** - {task['task']}{freq_badge}<br>🕒 設定: {task['target_time'].strftime('%H:%M')}", unsafe_allow_html=True)
                         elif 0 < diff_mins <= 30:
                             st.success(f"🟢 **即將執行** (剩餘 {int(diff_mins)} 分)\n\n{display_text}")
                         elif -30 <= diff_mins <= 0:
@@ -276,7 +289,6 @@ with tab1:
                         st.markdown("<br>", unsafe_allow_html=True)
                         cancel_key = f"confirm_cancel_{task['id']}"
                         
-                        # 如果還沒按取消，顯示正常的「完成」與「取消」
                         if not st.session_state.get(cancel_key, False):
                             if st.button("✅ 完成", key=f"done_{task['id']}", use_container_width=True):
                                 current_tasks = load_tasks()
@@ -288,6 +300,7 @@ with tab1:
                                             next_time = get_next_iso_time(t['target_time'], t['freq'])
                                             current_tasks.append({
                                                 "id": str(uuid.uuid4()),
+                                                "area": t.get('area'), # 傳承 area 屬性
                                                 "bed": t['bed'], "task": t['task'], "target_time": next_time,
                                                 "status": "pending", "actual_time": None, "freq": t['freq']
                                             })
@@ -299,7 +312,6 @@ with tab1:
                                 st.session_state[cancel_key] = True
                                 st.rerun()
                         
-                        # 如果按了取消，進入防呆確認模式
                         else:
                             st.error("確定取消此醫囑？")
                             if st.button("⭕ 確定", key=f"yes_cancel_{task['id']}", use_container_width=True):
@@ -347,7 +359,6 @@ with tab1:
 with tab2:
     st.subheader("📝 歷史紀錄 (點錯可隨時復原)")
     
-    # 篩選出 done 和 cancelled 的任務
     history_tasks = [t for t in st.session_state.tasks if t["status"] in ["done", "cancelled"]]
     
     if not history_tasks:
@@ -361,9 +372,9 @@ with tab2:
                     freq_badge = f" 🔁 **{task['freq']}**" if task['freq'] != "單次" else ""
                     
                     if task["status"] == "done":
-                        st.success(f"✔️ 【{task['bed']}】已完成：{task['task']}{freq_badge}\n\n🕒 原設定: {task['target_time'].strftime('%H:%M')} ｜ 實際操作: {task['actual_time'].strftime('%H:%M')}")
+                        st.success(f"✔️ **{task['bed']}** 已完成：{task['task']}{freq_badge}\n\n🕒 原設定: {task['target_time'].strftime('%H:%M')} ｜ 實際操作: {task['actual_time'].strftime('%H:%M')}")
                     else:
-                        st.error(f"🚫 【{task['bed']}】**已取消醫囑**：{task['task']}{freq_badge}\n\n🕒 原設定: {task['target_time'].strftime('%H:%M')} ｜ 實際操作: {task['actual_time'].strftime('%H:%M')}")
+                        st.error(f"🚫 **{task['bed']}** **已取消醫囑**：{task['task']}{freq_badge}\n\n🕒 原設定: {task['target_time'].strftime('%H:%M')} ｜ 實際操作: {task['actual_time'].strftime('%H:%M')}")
                         
                 with col2:
                     st.markdown("<br>", unsafe_allow_html=True)
@@ -388,7 +399,6 @@ with tab3:
         st.success("解鎖成功！")
         st.markdown("---")
         
-        # 只統計「已完成」的任務作為達標率，被取消的任務不列入懲罰
         done_tasks = [t for t in st.session_state.tasks if t["status"] == "done"]
         cancelled_tasks = [t for t in st.session_state.tasks if t["status"] == "cancelled"]
         
@@ -404,7 +414,6 @@ with tab3:
         met_col3.metric("🚨 嚴重超時", f"{overdue_count} 件")
         met_col4.metric("🏆 達標率", f"{on_time_rate} %")
         
-        # 將取消的紀錄也加入 CSV 以供完整備查
         df_data = []
         for t in (done_tasks + cancelled_tasks):
             diff_mins = round((t['actual_time'] - t['target_time']).total_seconds() / 60, 1)
