@@ -21,7 +21,7 @@ with st.sidebar:
     st.info("💡 **資料隱私**\n\n本系統為便利交班之輔助工具，請盡量以「床號」代替病患全名，切勿輸入身分證字號等敏感個資，以符合 HIPAA 及相關隱私法規。")
     st.markdown("---")
     st.markdown("##### 👨‍⚕️ 系統資訊")
-    st.markdown("© 2026 Developed by **急診護理師 吳智弘** \n*(Hualien Tzu Chi ER)*")
+    st.markdown("© 2026 Developed by **護理師 吳智弘** \n*(Hualien Tzu Chi ER)*")
     st.caption("All Rights Reserved. 僅供單位內部輔助使用，未經授權請勿作商業用途。")
 
 # ==========================================
