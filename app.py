@@ -12,9 +12,13 @@ tw_tz = timezone(timedelta(hours=8))
 if 'tasks' not in st.session_state:
     st.session_state.tasks = []
 
+# 初始化時間輸入框的預設記憶（避免勾選選單時時間被重置）
+if 'target_time_input' not in st.session_state:
+    st.session_state.target_time_input = datetime.datetime.now(tw_tz).time()
+
 st.title("🚨 急診留觀：智能待辦與交班提示器")
 
-# --- 版面左右分割 (比例 1 : 1.2) ---
+# --- 版面左右分割 ---
 col_left, col_right = st.columns([1, 1.2], gap="large")
 
 # ==========================================
@@ -43,7 +47,6 @@ with col_left:
     st.markdown("---")
     st.markdown("##### 📌 勾選待做事項")
     
-    # 2. 待辦事項勾選區
     chk_col1, chk_col2, chk_col3 = st.columns(3)
     selected_tasks = []
     
@@ -68,10 +71,8 @@ with col_left:
 
     st.markdown("---")
     
-    # 3. 時間設定與送出 (套用台灣時區)
-    now_tw = datetime.datetime.now(tw_tz)
-    default_time = (now_tw + datetime.timedelta(hours=2)).time()
-    target_time_input = st.time_input("設定提醒時間 (24小時制)", value=default_time)
+    # 3. 時間設定與送出 (綁定 key 來鎖定記憶，不會亂跳)
+    st.time_input("設定執行時間 (24小時制)", key="target_time_input")
 
     if st.button("新增提醒", use_container_width=True, type="primary"):
         if blood_draw:
@@ -85,11 +86,13 @@ with col_left:
         elif not selected_tasks:
             st.error("⚠️ 請至少勾選一項待做事項！")
         else:
-            # 將選擇的時間與今天的日期結合，並賦予台灣時區屬性
-            target_dt = datetime.datetime.combine(now_tw.date(), target_time_input).replace(tzinfo=tw_tz)
+            now_tw = datetime.datetime.now(tw_tz)
+            # 抓取鎖定住的使用者輸入時間
+            target_dt = datetime.datetime.combine(now_tw.date(), st.session_state.target_time_input).replace(tzinfo=tw_tz)
             
-            # 跨日邏輯：如果設定的時間比現在早，代表是設定到隔天 (例如 23:00 設定 02:00)
-            if target_dt < now_tw:
+            # 跨日邏輯判定
+            if target_dt < now_tw - datetime.timedelta(hours=12): 
+                # 如果設定的時間比現在早超過12小時，通常代表是設定給「明天」的
                 target_dt += datetime.timedelta(days=1)
                 
             task_str = "、".join(selected_tasks) 
@@ -103,14 +106,13 @@ with col_left:
             st.success(f"✅ 已成功新增 {bed_num} 的 【{task_str}】")
 
 # ==========================================
-# 右半邊：待辦與超時看板區
+# 右半邊：待辦與四段變色看板區
 # ==========================================
 with col_right:
     header_col1, header_col2 = st.columns([3, 1])
     with header_col1:
         st.subheader("📋 待辦任務看板")
     with header_col2:
-        # 清除按鈕只清除 "已完成" 的任務，保留未完成的
         if st.button("🧹 清除紀錄", use_container_width=True):
             st.session_state.tasks = [t for t in st.session_state.tasks if t["status"] == "pending"]
             st.rerun()
@@ -118,10 +120,10 @@ with col_right:
     now_tw = datetime.datetime.now(tw_tz)
     active_tasks = [t for t in st.session_state.tasks if t["status"] == "pending"]
 
-    # 顯示未完成任務
     if not active_tasks:
         st.info("🎉 目前沒有待辦任務！")
     else:
+        # 依照時間排序，最緊急的在最上面
         sorted_tasks = sorted(
             [(idx, t) for idx, t in enumerate(st.session_state.tasks) if t["status"] == "pending"],
             key=lambda x: x[1]["target_time"]
@@ -129,28 +131,30 @@ with col_right:
         
         for original_idx, task in sorted_tasks:
             time_diff = task["target_time"] - now_tw
-            is_overdue = time_diff.total_seconds() <= 0
+            diff_mins = time_diff.total_seconds() / 60
 
+            # 用框線卡片包裝任務
             with st.container(border=True):
                 task_col1, task_col2 = st.columns([4, 1])
+                
                 with task_col1:
-                    if is_overdue:
-                        st.error(f"🚨 **超時提醒！** 【{task['bed']}】 - {task['task']} (設定: {task['target_time'].strftime('%H:%M')})")
+                    # 【四段變色邏輯】
+                    if diff_mins > 30:
+                        # 1. 超過半小時：沒有底色
+                        st.markdown(f"⚪ **尚未到期** (剩餘 {int(diff_mins)} 分鐘)<br>【{task['bed']}】 - {task['task']}<br>🕒 設定時間: {task['target_time'].strftime('%H:%M')}", unsafe_allow_html=True)
+                    
+                    elif 0 < diff_mins <= 30:
+                        # 2. 進入半小時內：綠色底色
+                        st.success(f"🟢 **即將執行** (剩餘 {int(diff_mins)} 分鐘)\n\n【{task['bed']}】 - {task['task']}\n\n🕒 設定時間: {task['target_time'].strftime('%H:%M')}")
+                    
+                    elif -30 <= diff_mins <= 0:
+                        # 3. 超時半小時以內：黃色底色
+                        st.warning(f"🟡 **已超時** (超時 {int(abs(diff_mins))} 分鐘)\n\n【{task['bed']}】 - {task['task']}\n\n🕒 設定時間: {task['target_time'].strftime('%H:%M')}")
+                    
                     else:
-                        mins_left = int(time_diff.total_seconds() / 60)
-                        st.warning(f"⏳ **倒數 {mins_left} 分鐘** 【{task['bed']}】 - {task['task']} (設定: {task['target_time'].strftime('%H:%M')})")
-                with task_col2:
-                    if st.button("✅ 完成", key=f"done_{original_idx}", use_container_width=True):
-                        st.session_state.tasks[original_idx]["status"] = "done"
-                        st.rerun()
+                        # 4. 超時超過半小時：紅色底色
+                        st.error(f"🔴 **嚴重超時** (超時 {int(abs(diff_mins))} 分鐘)\n\n【{task['bed']}】 - {task['task']}\n\n🕒 設定時間: {task['target_time'].strftime('%H:%M')}")
 
-    # --- 新增：已完成任務紀錄區塊 ---
-    st.markdown("<br>", unsafe_allow_html=True)
-    with st.expander("📜 已完成任務紀錄 (點擊展開查看)"):
-        done_tasks = [t for t in st.session_state.tasks if t["status"] == "done"]
-        if not done_tasks:
-            st.caption("目前尚無已完成的紀錄。")
-        else:
-            # 依照完成的先後順序顯示
-            for t in done_tasks:
-                st.success(f"✔️ 【{t['bed']}】已完成：{t['task']} (原設定: {t['target_time'].strftime('%H:%M')})")
+                with task_col2:
+                    st.markdown("<br>", unsafe_allow_html=True) # 微調按鈕高度
+                    if st.button("✅ 完成", key=f"done_{original_idx}",
