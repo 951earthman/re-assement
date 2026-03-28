@@ -13,16 +13,15 @@ tw_tz = timezone(timedelta(hours=8))
 DATA_FILE = "er_tasks_data.json"
 
 # ==========================================
-# 側邊欄：保護聲明與著作權 (完整恢復版)
+# 側邊欄：保護聲明與著作權
 # ==========================================
 with st.sidebar:
     st.header("⚖️ 系統保護聲明")
     st.warning("⚠️ **免責聲明**\n\n本系統僅供臨床交班與待辦事項輔助提醒，**並非正式醫療紀錄（HIS）系統**。所有醫療處置、給藥時間與醫囑變更，請一律以醫院主系統與醫師正式醫囑為準。")
-    st.info("💡 **資料隱私**\n\n本系統為便利交班之輔助工具，請盡量以「床號」代替病患全名，切勿輸入身分證字號等敏感個資，以符合 HIPAA 及相關隱私法規。")
+    st.info("💡 **資料隱私**\n\n本系統為便利交班之輔助工具，請盡量以「床號」代替病患全名，切勿輸入敏感個資。")
     st.markdown("---")
     st.markdown("##### 👨‍⚕️ 系統資訊")
     st.markdown("© 2026 Developed by **護理師 吳智弘** \n*(花蓮慈濟醫學中心 急診部)*")
-    st.caption("All Rights Reserved. 僅供單位內部輔助使用，未經授權請勿作商業用途。")
 
 # ==========================================
 # 醫院 ISO 常規時間對照表 (24小時制)
@@ -206,6 +205,9 @@ with tab1:
         elif filter_zone != "全區顯示": active_tasks = [t for t in active_tasks if t.get('area') == filter_zone]
         if filter_task != "全部顯示": active_tasks = [t for t in active_tasks if filter_task in t['task']]
 
+        # 只要時間小於 30 分鐘 (包含進入綠燈、黃燈、紅燈)，網頁就會閃爍提醒
+        has_alert = any((t["target_time"] - now_tw).total_seconds() / 60 <= 30 for t in active_tasks)
+
         if not active_tasks: st.info("🎉 目前此條件下無待辦任務！")
         else:
             for task in sorted(active_tasks, key=lambda x: x["target_time"]):
@@ -221,18 +223,30 @@ with tab1:
                     task_col1, task_col2 = st.columns([3.5, 1.5])
                     
                     with task_col1:
-                        display_text = f"📍 **{task['bed']}** - {task['task']}{freq_badge}\n\n🕒 設定: {task['target_time'].strftime('%H:%M')}"
-                        if diff_mins > 30: st.markdown(f"⚪ **尚未到期** (剩餘 {int(diff_mins)} 分)<br>📍 **{task['bed']}** - {task['task']}{freq_badge}<br>🕒 設定: {task['target_time'].strftime('%H:%M')}", unsafe_allow_html=True)
-                        elif 0 < diff_mins <= 30: st.success(f"🟢 **即將執行** (剩餘 {int(diff_mins)} 分)\n\n{display_text}")
-                        elif -30 <= diff_mins <= 0: st.warning(f"🟡 **已超時** (超時 {int(abs(diff_mins))} 分)\n\n{display_text}")
-                        else: st.error(f"🔴 **嚴重超時** (超時 {int(abs(diff_mins))} 分)\n\n{display_text}")
+                        display_text = f"📍 **{task['bed']}** - {task['task']}{freq_badge}\n\n🕒 設定時間: {task['target_time'].strftime('%H:%M')}"
+                        
+                        # --- 重新定義的四段燈號 (完全符合臨床 90 分鐘合格區間) ---
+                        if diff_mins > 30:
+                            # 提早超過半小時
+                            st.markdown(f"⚪ **尚未到期** (距離執行還有 {int(diff_mins)} 分)<br>📍 **{task['bed']}** - {task['task']}{freq_badge}<br>🕒 設定時間: {task['target_time'].strftime('%H:%M')}", unsafe_allow_html=True)
+                        elif 0 <= diff_mins <= 30:
+                            # 提早半小時以內 (進入合格區間，準備執行)
+                            st.success(f"🟢 **可開始執行** (提前 {int(diff_mins)} 分內)\n\n{display_text}")
+                        elif -60 <= diff_mins < 0:
+                            # 延遲 60 分鐘以內 (仍在合格區間內)
+                            grace_left = 60 - int(abs(diff_mins))
+                            st.warning(f"🟡 **執行區間內** (距超時剩 {grace_left} 分)\n\n{display_text}")
+                        else:
+                            # 延遲超過 60 分鐘 (真正超時)
+                            overdue_mins = int(abs(diff_mins)) - 60
+                            st.error(f"🔴 **嚴重超時** (超過合格範圍 {overdue_mins} 分)\n\n{display_text}")
 
                     with task_col2:
                         st.markdown("<br>", unsafe_allow_html=True)
                         cancel_key = f"confirm_cancel_{task['id']}"
                         reason_key = f"require_reason_{task['id']}"
                         
-                        # --- 狀態 1：顯示原因填寫表單 (因為超時/提前被攔截) ---
+                        # --- 狀態 1：顯示原因填寫表單 (因為超出合格範圍被攔截) ---
                         if st.session_state.get(reason_key, False):
                             st.warning("⚠️ 執行時間異常，請選擇原因：")
                             reason_opt = st.selectbox("異常原因", ["1.依照醫囑延後、提前", "2.病人不在位置上", "3.遺漏執行完成登錄", "4.因忙碌忘記執行", "5.其他 (自行輸入)"], key=f"sel_{task['id']}")
@@ -273,7 +287,7 @@ with tab1:
                         # --- 狀態 3：預設狀態 (正常按鈕) ---
                         else:
                             if st.button("✅ 完成", key=f"done_{task['id']}", use_container_width=True):
-                                # 判斷是否觸發異常原因：超時 > 60分 (diff_mins < -60) 或 提前 > 30分 (diff_mins > 30)
+                                # 攔截條件：延遲超過 60分 (diff_mins < -60) 或 提早超過 30分 (diff_mins > 30)
                                 if diff_mins < -60 or diff_mins > 30:
                                     st.session_state[reason_key] = True
                                     st.rerun()
@@ -294,6 +308,30 @@ with tab1:
                             if st.button("❌ 取消醫囑", key=f"init_cancel_{task['id']}", use_container_width=True):
                                 st.session_state[cancel_key] = True; st.rerun()
 
+        if has_alert:
+            components.html("""
+            <script>
+                const parentDoc = window.parent.document;
+                if (!window.parent.flashInterval) {
+                    let isFlashing = false;
+                    window.parent.flashInterval = setInterval(() => {
+                        parentDoc.title = isFlashing ? "⚠️【即將到期/超時】ER 提示器" : "🚨 ER 提示器";
+                        isFlashing = !isFlashing;
+                    }, 1000);
+                }
+            </script>
+            """, height=0, width=0)
+        else:
+            components.html("""
+            <script>
+                if (window.parent.flashInterval) {
+                    clearInterval(window.parent.flashInterval);
+                    window.parent.flashInterval = null;
+                }
+                window.parent.document.title = "🚨 ER 提示器";
+            </script>
+            """, height=0, width=0)
+
 # ------------------------------------------
 # 分頁 2：全觀儀表板
 # ------------------------------------------
@@ -305,15 +343,17 @@ with tab_dash:
     if not dash_tasks: st.success("🎉 目前全單位沒有任何待辦任務，系統清空，完美交班！")
     else:
         total_active = len(dash_tasks)
-        overdue_cnt = sum(1 for t in dash_tasks if (t['target_time'] - now_tw).total_seconds() / 60 <= 0)
-        warning_cnt = sum(1 for t in dash_tasks if 0 < (t['target_time'] - now_tw).total_seconds() / 60 <= 30)
+        # 超時：延遲超過 60 分鐘 (< -60)
+        overdue_cnt = sum(1 for t in dash_tasks if (t['target_time'] - now_tw).total_seconds() / 60 < -60)
+        # 合格執行區間：提早 30 分鐘 到 延遲 60 分鐘內 (-60 <= x <= 30)
+        warning_cnt = sum(1 for t in dash_tasks if -60 <= (t['target_time'] - now_tw).total_seconds() / 60 <= 30)
         safe_cnt = total_active - overdue_cnt - warning_cnt
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("🏥 總待辦", f"{total_active} 件")
-        m2.metric("🚨 已超時", f"{overdue_cnt} 件")
-        m3.metric("🟢 30分內到期", f"{warning_cnt} 件")
-        m4.metric("⚪ 安全 (>30分)", f"{safe_cnt} 件")
+        m2.metric("🚨 嚴重超時 (>1hr)", f"{overdue_cnt} 件")
+        m3.metric("🟢/🟡 執行區間內", f"{warning_cnt} 件")
+        m4.metric("⚪ 尚未到期 (>30分)", f"{safe_cnt} 件")
         st.markdown("---")
         dash_col1, dash_col2 = st.columns(2)
         with dash_col1:
@@ -367,7 +407,6 @@ with tab2:
 # ------------------------------------------
 with tab3:
     st.subheader("🔒 管理員專區")
-    # 將密碼更新為 6155
     admin_pw = st.text_input("請輸入管理員密碼以解鎖後台：", type="password")
     if admin_pw == "6155":
         st.markdown("---")
@@ -375,19 +414,21 @@ with tab3:
         cancelled_tasks = [t for t in st.session_state.tasks if t["status"] == "cancelled"]
         
         total_done = len(done_tasks)
-        on_time_count = sum(1 for t in done_tasks if (t["actual_time"] - t["target_time"]).total_seconds() / 60 <= 60)
+        # 後台達標標準對齊：提早 30 分 到 延遲 60 分鐘內 (-30 <= actual-target <= 60)
+        on_time_count = sum(1 for t in done_tasks if -30 <= (t["actual_time"] - t["target_time"]).total_seconds() / 60 <= 60)
         on_time_rate = round((on_time_count / total_done) * 100, 1) if total_done > 0 else 0
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("總完成 (不含取消)", f"{total_done} 件")
-        m2.metric("✅ 達標 (含1小時)", f"{on_time_count} 件")
-        m3.metric("🚨 嚴重超時", f"{total_done - on_time_count} 件")
+        m2.metric("✅ 達標 (-30~+60分)", f"{on_time_count} 件")
+        m3.metric("🚨 異常執行時間", f"{total_done - on_time_count} 件")
         m4.metric("🏆 達標率", f"{on_time_rate} %")
         
         df_data = []
         for t in (done_tasks + cancelled_tasks):
             diff_mins = round((t['actual_time'] - t['target_time']).total_seconds() / 60, 1)
-            status_str = "已取消 (DC)" if t['status'] == 'cancelled' else ("是" if diff_mins <= 60 else "否")
+            # 後台報表判定文字同步更新
+            status_str = "已取消 (DC)" if t['status'] == 'cancelled' else ("是" if -30 <= diff_mins <= 60 else "否")
             df_data.append({
                 "狀態": "完成" if t['status'] == 'done' else "取消",
                 "床號": t['bed'], "待做事項": t['task'], "頻率": t['freq'],
