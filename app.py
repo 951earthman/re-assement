@@ -14,7 +14,7 @@ tw_tz = timezone(timedelta(hours=8))
 DATA_FILE = "er_tasks_data.json"
 
 # ==========================================
-# 升級版：共用資料庫 (JSON 讀寫功能)
+# 共用資料庫 (JSON 讀寫功能)
 # ==========================================
 def load_tasks():
     if not os.path.exists(DATA_FILE):
@@ -22,7 +22,6 @@ def load_tasks():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # 將字串轉換回時間格式
             for d in data:
                 d['target_time'] = datetime.datetime.fromisoformat(d['target_time'])
                 if d.get('actual_time'):
@@ -34,7 +33,6 @@ def load_tasks():
 def save_tasks(tasks):
     safe_tasks = []
     for t in tasks:
-        # 複製一份資料，準備將時間轉換為可以存檔的字串
         task_dict = t.copy()
         task_dict['target_time'] = t['target_time'].isoformat()
         if t.get('actual_time'):
@@ -44,23 +42,19 @@ def save_tasks(tasks):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(safe_tasks, f, ensure_ascii=False, indent=2)
 
-# 每次網頁互動時，都自動從檔案讀取最新資料
-if 'tasks' not in st.session_state:
-    st.session_state.tasks = load_tasks()
-else:
-    # 確保即時同步
-    st.session_state.tasks = load_tasks()
+# 確保每次畫面互動時，狀態都是最新的
+st.session_state.tasks = load_tasks()
 
 # ==========================================
 # 前台介面開始
 # ==========================================
 title_col, sync_col = st.columns([4, 1])
 with title_col:
-    st.title("🚨 急診留觀：智能待辦與交班提示器 (跨電腦連線版)")
+    st.title("🚨 急診留觀：智能待辦與交班提示器")
 with sync_col:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 點我同步最新資料", use_container_width=True):
-        st.rerun() # 點擊後會重新執行程式碼，讀取最新 JSON 檔
+        st.rerun()
 
 tab1, tab2 = st.tabs(["🏥 臨床待辦看板", "📊 後台數據追蹤 (管理員專用)"])
 
@@ -138,7 +132,6 @@ with tab1:
         time_str = st.text_input("設定執行時間 (輸入4碼數字，例如: 0312 或 1530)", max_chars=4, placeholder="0312")
 
         if st.button("新增提醒", use_container_width=True, type="primary"):
-            
             if on_cath_check:
                 if remove_old_cath:
                     if old_cath_location.strip() == "":
@@ -185,10 +178,10 @@ with tab1:
                         
                     task_str = "、".join(selected_tasks) 
                     
-                    # 讀取最新資料庫 -> 加入新資料 -> 寫回資料庫
+                    # 寫入資料庫
                     current_tasks = load_tasks()
                     current_tasks.append({
-                        "id": str(uuid.uuid4()), # 賦予這筆任務獨一無二的身分證
+                        "id": str(uuid.uuid4()),
                         "bed": bed_num,
                         "task": task_str,
                         "target_time": target_dt,
@@ -197,7 +190,11 @@ with tab1:
                     })
                     save_tasks(current_tasks)
                     
-                    st.success(f"✅ 已成功新增 {bed_num} 的 【{task_str}】")
+                    # 使用 toast 顯示成功訊息 (會飄浮在畫面上，不會因為重整而消失)
+                    st.toast(f"✅ 已成功新增 {bed_num} 的待辦事項！")
+                    # 強制重新整理網頁，讓右邊看板立刻更新
+                    st.rerun()
+                    
                 except ValueError:
                     st.error("⚠️ 時間格式錯誤！請確認小時(00-23)與分鐘(00-59)是否正確。")
 
@@ -210,11 +207,10 @@ with tab1:
             pass 
 
         now_tw = datetime.datetime.now(tw_tz)
-        # 直接使用從檔案讀取出來的 st.session_state.tasks
         active_tasks = [t for t in st.session_state.tasks if t["status"] == "pending"]
 
         if not active_tasks:
-            st.info("🎉 目前沒有待辦任務！如果別台電腦有新增，請點擊右上角「🔄 同步最新資料」。")
+            st.info("🎉 目前沒有待辦任務！如果別台電腦有新增，請點擊上方「🔄 同步最新資料」。")
         else:
             sorted_tasks = sorted(
                 [(t) for t in st.session_state.tasks if t["status"] == "pending"],
@@ -240,7 +236,6 @@ with tab1:
 
                     with task_col2:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        # 使用任務專屬 ID 來綁定按鈕，不怕順序亂掉
                         if st.button("✅ 完成", key=f"done_{task['id']}", use_container_width=True):
                             current_tasks = load_tasks()
                             for t in current_tasks:
@@ -248,71 +243,81 @@ with tab1:
                                     t['status'] = 'done'
                                     t['actual_time'] = datetime.datetime.now(tw_tz)
                             save_tasks(current_tasks)
+                            st.toast("✅ 任務已完成！")
                             st.rerun()
 
 # ------------------------------------------
-# 分頁 2：後台數據追蹤與匯出
+# 分頁 2：後台數據追蹤與匯出 (密碼保護)
 # ------------------------------------------
 with tab2:
-    st.subheader("📈 執行成效追蹤後台")
+    st.subheader("🔒 管理員專區")
     
-    done_tasks = [t for t in st.session_state.tasks if t["status"] == "done"]
+    # 建立密碼輸入框
+    admin_pw = st.text_input("請輸入管理員密碼以解鎖後台：", type="password")
     
-    if not done_tasks:
-        st.info("目前尚無已完成的任務紀錄。")
-    else:
-        total_done = len(done_tasks)
-        
-        on_time_count = 0
-        for t in done_tasks:
-            diff_mins = (t["actual_time"] - t["target_time"]).total_seconds() / 60
-            if diff_mins <= 60:
-                on_time_count += 1
-                
-        overdue_count = total_done - on_time_count
-        on_time_rate = round((on_time_count / total_done) * 100, 1) if total_done > 0 else 0
-
-        met_col1, met_col2, met_col3, met_col4 = st.columns(4)
-        met_col1.metric("總完成任務數", f"{total_done} 件")
-        met_col2.metric("✅ 達標完成 (含1小時內)", f"{on_time_count} 件")
-        met_col3.metric("🚨 嚴重超時 (>1小時)", f"{overdue_count} 件")
-        met_col4.metric("🏆 任務達標率", f"{on_time_rate} %")
-        
+    if admin_pw == "ALEX":
+        st.success("解鎖成功！歡迎進入數據追蹤後台。")
         st.markdown("---")
         
-        df_data = []
-        for t in done_tasks:
-            target_str = t['target_time'].strftime('%Y-%m-%d %H:%M')
-            actual_str = t['actual_time'].strftime('%Y-%m-%d %H:%M:%S')
-            diff_mins = round((t['actual_time'] - t['target_time']).total_seconds() / 60, 1)
-            is_on_time = "是" if diff_mins <= 60 else "否(超時>1hr)"
+        done_tasks = [t for t in st.session_state.tasks if t["status"] == "done"]
+        
+        if not done_tasks:
+            st.info("目前尚無已完成的任務紀錄。")
+        else:
+            total_done = len(done_tasks)
             
-            df_data.append({
-                "床號": t['bed'],
-                "待做事項": t['task'],
-                "目標時間": target_str,
-                "實際完成時間": actual_str,
-                "是否達標(含1小時寬限)": is_on_time,
-                "時間差(分鐘)": diff_mins 
-            })
+            on_time_count = 0
+            for t in done_tasks:
+                diff_mins = (t["actual_time"] - t["target_time"]).total_seconds() / 60
+                if diff_mins <= 60:
+                    on_time_count += 1
+                    
+            overdue_count = total_done - on_time_count
+            on_time_rate = round((on_time_count / total_done) * 100, 1) if total_done > 0 else 0
+
+            met_col1, met_col2, met_col3, met_col4 = st.columns(4)
+            met_col1.metric("總完成任務數", f"{total_done} 件")
+            met_col2.metric("✅ 達標完成 (含1小時內)", f"{on_time_count} 件")
+            met_col3.metric("🚨 嚴重超時 (>1小時)", f"{overdue_count} 件")
+            met_col4.metric("🏆 任務達標率", f"{on_time_rate} %")
             
-        df = pd.DataFrame(df_data)
-        st.dataframe(df, use_container_width=True)
-        
-        # 加一個清除全部歷史紀錄的按鈕，方便大夜班交班後清空
-        if st.button("🗑️ 清空所有歷史資料 (交班後使用)", type="primary"):
-            save_tasks([])
-            st.success("資料已全部清空！準備迎接下一班！")
-            st.rerun()
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        csv = df.to_csv(index=False).encode('utf-8-sig')
-        current_date_str = datetime.datetime.now(tw_tz).strftime("%Y%m%d_%H%M")
-        
-        st.download_button(
-            label="📥 下載今日執行紀錄 (CSV 檔)",
-            data=csv,
-            file_name=f"ER_NightShift_Log_{current_date_str}.csv",
-            mime="text/csv",
-            type="primary"
-        )
+            st.markdown("---")
+            
+            df_data = []
+            for t in done_tasks:
+                target_str = t['target_time'].strftime('%Y-%m-%d %H:%M')
+                actual_str = t['actual_time'].strftime('%Y-%m-%d %H:%M:%S')
+                diff_mins = round((t['actual_time'] - t['target_time']).total_seconds() / 60, 1)
+                is_on_time = "是" if diff_mins <= 60 else "否(超時>1hr)"
+                
+                df_data.append({
+                    "床號": t['bed'],
+                    "待做事項": t['task'],
+                    "目標時間": target_str,
+                    "實際完成時間": actual_str,
+                    "是否達標": is_on_time,
+                    "時間差(分)": diff_mins 
+                })
+                
+            df = pd.DataFrame(df_data)
+            st.dataframe(df, use_container_width=True)
+            
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                csv = df.to_csv(index=False).encode('utf-8-sig')
+                current_date_str = datetime.datetime.now(tw_tz).strftime("%Y%m%d_%H%M")
+                st.download_button(
+                    label="📥 下載今日執行紀錄 (CSV 檔)",
+                    data=csv,
+                    file_name=f"ER_NightShift_Log_{current_date_str}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            with col_btn2:
+                if st.button("🗑️ 清空所有歷史資料 (交班後使用)", type="primary", use_container_width=True):
+                    save_tasks([])
+                    st.toast("🗑️ 資料已全部清空！準備迎接下一班！")
+                    st.rerun()
+
+    elif admin_pw != "":
+        st.error("❌ 密碼錯誤！請重新輸入。")
