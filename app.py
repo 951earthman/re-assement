@@ -62,7 +62,6 @@ with tab1:
             if st.checkbox("病解"): selected_tasks.append("病解")
             if st.checkbox("NG"): selected_tasks.append("NG")
         with chk_col3:
-            # 將 on cath 改為變數，以便下方做連動展開
             on_cath_check = st.checkbox("on cath")
             if st.checkbox("Foley"): selected_tasks.append("Foley")
             other_check = st.checkbox("其他")
@@ -100,7 +99,6 @@ with tab1:
 
         if st.button("新增提醒", use_container_width=True, type="primary"):
             
-            # 處理 on cath 的字串邏輯
             if on_cath_check:
                 if remove_old_cath:
                     if old_cath_location.strip() == "":
@@ -110,7 +108,6 @@ with tab1:
                 else:
                     selected_tasks.append("on cath")
 
-            # 處理各種需要自行輸入文字的選項
             if other_check:
                 if other_text.strip() == "":
                     selected_tasks.append("其他")
@@ -129,7 +126,6 @@ with tab1:
                 else:
                     selected_tasks.append(f"傷口護理({wound_details})")
 
-            # 防呆驗證機制
             if not bed_num:
                 st.error("⚠️ 請填寫或選擇床號！")
             elif not selected_tasks:
@@ -214,16 +210,24 @@ with tab2:
     if not done_tasks:
         st.info("目前尚無已完成的任務紀錄。")
     else:
+        # 計算數據指標 (加入 1 小時寬限期邏輯)
         total_done = len(done_tasks)
-        on_time_count = sum(1 for t in done_tasks if t["actual_time"] <= t["target_time"])
+        
+        # 只要延遲在 60 分鐘內，都算達標
+        on_time_count = 0
+        for t in done_tasks:
+            diff_mins = (t["actual_time"] - t["target_time"]).total_seconds() / 60
+            if diff_mins <= 60:
+                on_time_count += 1
+                
         overdue_count = total_done - on_time_count
         on_time_rate = round((on_time_count / total_done) * 100, 1) if total_done > 0 else 0
 
         met_col1, met_col2, met_col3, met_col4 = st.columns(4)
         met_col1.metric("總完成任務數", f"{total_done} 件")
-        met_col2.metric("✅ 準時完成", f"{on_time_count} 件")
-        met_col3.metric("🚨 超時完成", f"{overdue_count} 件")
-        met_col4.metric("🏆 準時達成率", f"{on_time_rate} %")
+        met_col2.metric("✅ 達標完成 (含1小時內)", f"{on_time_count} 件")
+        met_col3.metric("🚨 嚴重超時 (>1小時)", f"{overdue_count} 件")
+        met_col4.metric("🏆 任務達標率", f"{on_time_rate} %")
         
         st.markdown("---")
         
@@ -231,15 +235,19 @@ with tab2:
         for t in done_tasks:
             target_str = t['target_time'].strftime('%Y-%m-%d %H:%M')
             actual_str = t['actual_time'].strftime('%Y-%m-%d %H:%M:%S')
-            is_on_time = "是" if t['actual_time'] <= t['target_time'] else "否"
+            
+            # 精確計算時間差(分鐘)
             diff_mins = round((t['actual_time'] - t['target_time']).total_seconds() / 60, 1)
+            
+            # 後台報表判定：小於等於 60 分鐘皆為「是」
+            is_on_time = "是" if diff_mins <= 60 else "否(超時>1hr)"
             
             df_data.append({
                 "床號": t['bed'],
                 "待做事項": t['task'],
                 "目標時間": target_str,
                 "實際完成時間": actual_str,
-                "是否準時": is_on_time,
+                "是否達標(含1小時寬限)": is_on_time,
                 "時間差(分鐘)": diff_mins 
             })
             
