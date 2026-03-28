@@ -2,26 +2,70 @@ import streamlit as st
 import datetime
 from datetime import timezone, timedelta
 import pandas as pd
+import json
+import os
+import uuid
 
 # --- 網頁基礎設定 ---
 st.set_page_config(page_title="ER 大夜班提示器", layout="wide")
 
 # 強制設定為台灣時區 (UTC+8)
 tw_tz = timezone(timedelta(hours=8))
+DATA_FILE = "er_tasks_data.json"
 
-# 初始化 session_state
+# ==========================================
+# 升級版：共用資料庫 (JSON 讀寫功能)
+# ==========================================
+def load_tasks():
+    if not os.path.exists(DATA_FILE):
+        return []
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # 將字串轉換回時間格式
+            for d in data:
+                d['target_time'] = datetime.datetime.fromisoformat(d['target_time'])
+                if d.get('actual_time'):
+                    d['actual_time'] = datetime.datetime.fromisoformat(d['actual_time'])
+            return data
+    except Exception as e:
+        return []
+
+def save_tasks(tasks):
+    safe_tasks = []
+    for t in tasks:
+        # 複製一份資料，準備將時間轉換為可以存檔的字串
+        task_dict = t.copy()
+        task_dict['target_time'] = t['target_time'].isoformat()
+        if t.get('actual_time'):
+            task_dict['actual_time'] = t['actual_time'].isoformat()
+        safe_tasks.append(task_dict)
+        
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(safe_tasks, f, ensure_ascii=False, indent=2)
+
+# 每次網頁互動時，都自動從檔案讀取最新資料
 if 'tasks' not in st.session_state:
-    st.session_state.tasks = []
-
-st.title("🚨 急診留觀：智能待辦與交班提示器")
+    st.session_state.tasks = load_tasks()
+else:
+    # 確保即時同步
+    st.session_state.tasks = load_tasks()
 
 # ==========================================
-# 建立前台與後台分頁
+# 前台介面開始
 # ==========================================
+title_col, sync_col = st.columns([4, 1])
+with title_col:
+    st.title("🚨 急診留觀：智能待辦與交班提示器 (跨電腦連線版)")
+with sync_col:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("🔄 點我同步最新資料", use_container_width=True):
+        st.rerun() # 點擊後會重新執行程式碼，讀取最新 JSON 檔
+
 tab1, tab2 = st.tabs(["🏥 臨床待辦看板", "📊 後台數據追蹤 (管理員專用)"])
 
 # ------------------------------------------
-# 分頁 1：臨床待辦看板 (日常操作區)
+# 分頁 1：臨床待辦看板
 # ------------------------------------------
 with tab1:
     col_left, col_right = st.columns([1, 1.2], gap="large")
@@ -68,7 +112,6 @@ with tab1:
             
         st.markdown(" ")
         
-        # 展開「on cath」的細節選項
         remove_old_cath = False
         old_cath_location = ""
         if on_cath_check:
@@ -76,18 +119,15 @@ with tab1:
             if remove_old_cath:
                 old_cath_location = st.text_input("輸入原 cath 位置", placeholder="例如: 左手背、右前臂...")
 
-        # 展開「其他」的輸入框
         other_text = ""
         if other_check:
             other_text = st.text_input("輸入其他待做事項", placeholder="例如: 觀察過敏反應、紀錄 I/O...")
             
-        # 抽血專區
         blood_draw = st.checkbox("💉 抽血")
         blood_tests = ""
         if blood_draw:
             blood_tests = st.text_input("輸入檢驗項目", placeholder="例如: CBC, SMA, Trop-I...")
 
-        # 傷口護理專區
         wound_care = st.checkbox("🩹 傷口護理")
         wound_details = ""
         if wound_care:
@@ -145,13 +185,18 @@ with tab1:
                         
                     task_str = "、".join(selected_tasks) 
                     
-                    st.session_state.tasks.append({
+                    # 讀取最新資料庫 -> 加入新資料 -> 寫回資料庫
+                    current_tasks = load_tasks()
+                    current_tasks.append({
+                        "id": str(uuid.uuid4()), # 賦予這筆任務獨一無二的身分證
                         "bed": bed_num,
                         "task": task_str,
                         "target_time": target_dt,
                         "status": "pending",
                         "actual_time": None
                     })
+                    save_tasks(current_tasks)
+                    
                     st.success(f"✅ 已成功新增 {bed_num} 的 【{task_str}】")
                 except ValueError:
                     st.error("⚠️ 時間格式錯誤！請確認小時(00-23)與分鐘(00-59)是否正確。")
@@ -165,17 +210,18 @@ with tab1:
             pass 
 
         now_tw = datetime.datetime.now(tw_tz)
+        # 直接使用從檔案讀取出來的 st.session_state.tasks
         active_tasks = [t for t in st.session_state.tasks if t["status"] == "pending"]
 
         if not active_tasks:
-            st.info("🎉 目前沒有待辦任務！")
+            st.info("🎉 目前沒有待辦任務！如果別台電腦有新增，請點擊右上角「🔄 同步最新資料」。")
         else:
             sorted_tasks = sorted(
-                [(idx, t) for idx, t in enumerate(st.session_state.tasks) if t["status"] == "pending"],
-                key=lambda x: x[1]["target_time"]
+                [(t) for t in st.session_state.tasks if t["status"] == "pending"],
+                key=lambda x: x["target_time"]
             )
             
-            for original_idx, task in sorted_tasks:
+            for task in sorted_tasks:
                 time_diff = task["target_time"] - now_tw
                 diff_mins = time_diff.total_seconds() / 60
 
@@ -194,13 +240,18 @@ with tab1:
 
                     with task_col2:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("✅ 完成", key=f"done_{original_idx}", use_container_width=True):
-                            st.session_state.tasks[original_idx]["status"] = "done"
-                            st.session_state.tasks[original_idx]["actual_time"] = datetime.datetime.now(tw_tz)
+                        # 使用任務專屬 ID 來綁定按鈕，不怕順序亂掉
+                        if st.button("✅ 完成", key=f"done_{task['id']}", use_container_width=True):
+                            current_tasks = load_tasks()
+                            for t in current_tasks:
+                                if t['id'] == task['id']:
+                                    t['status'] = 'done'
+                                    t['actual_time'] = datetime.datetime.now(tw_tz)
+                            save_tasks(current_tasks)
                             st.rerun()
 
 # ------------------------------------------
-# 分頁 2：後台數據追蹤與匯出 (研究/品管用)
+# 分頁 2：後台數據追蹤與匯出
 # ------------------------------------------
 with tab2:
     st.subheader("📈 執行成效追蹤後台")
@@ -210,10 +261,8 @@ with tab2:
     if not done_tasks:
         st.info("目前尚無已完成的任務紀錄。")
     else:
-        # 計算數據指標 (加入 1 小時寬限期邏輯)
         total_done = len(done_tasks)
         
-        # 只要延遲在 60 分鐘內，都算達標
         on_time_count = 0
         for t in done_tasks:
             diff_mins = (t["actual_time"] - t["target_time"]).total_seconds() / 60
@@ -235,11 +284,7 @@ with tab2:
         for t in done_tasks:
             target_str = t['target_time'].strftime('%Y-%m-%d %H:%M')
             actual_str = t['actual_time'].strftime('%Y-%m-%d %H:%M:%S')
-            
-            # 精確計算時間差(分鐘)
             diff_mins = round((t['actual_time'] - t['target_time']).total_seconds() / 60, 1)
-            
-            # 後台報表判定：小於等於 60 分鐘皆為「是」
             is_on_time = "是" if diff_mins <= 60 else "否(超時>1hr)"
             
             df_data.append({
@@ -254,6 +299,13 @@ with tab2:
         df = pd.DataFrame(df_data)
         st.dataframe(df, use_container_width=True)
         
+        # 加一個清除全部歷史紀錄的按鈕，方便大夜班交班後清空
+        if st.button("🗑️ 清空所有歷史資料 (交班後使用)", type="primary"):
+            save_tasks([])
+            st.success("資料已全部清空！準備迎接下一班！")
+            st.rerun()
+        
+        st.markdown("<br>", unsafe_allow_html=True)
         csv = df.to_csv(index=False).encode('utf-8-sig')
         current_date_str = datetime.datetime.now(tw_tz).strftime("%Y%m%d_%H%M")
         
