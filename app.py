@@ -157,4 +157,16 @@ with col_right:
 
                 with task_col2:
                     st.markdown("<br>", unsafe_allow_html=True) # 微調按鈕高度
-                    if st.button("✅ 完成", key=f"done_{original_idx}",
+                    if st.button("✅ 完成", key=f"done_{original_idx}", use_container_width=True):
+                        st.session_state.tasks[original_idx]["status"] = "done"
+                        st.rerun()
+
+    # --- 已完成任務紀錄區塊 ---
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("📜 已完成任務紀錄 (點擊展開查看)"):
+        done_tasks = [t for t in st.session_state.tasks if t["status"] == "done"]
+        if not done_tasks:
+            st.caption("目前尚無已完成的紀錄。")
+        else:
+            for t in done_tasks:
+                st.success(f"✔️ 【{t['bed']}】已完成：{t['task']} (原設定: {t['target_time'].strftime('%H:%M')})")
