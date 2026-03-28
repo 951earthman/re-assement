@@ -48,6 +48,7 @@ with tab1:
         st.markdown("---")
         st.markdown("##### 📌 勾選待做事項")
         
+        # 重新編排版面，加入 NG、Foley 與 其他
         chk_col1, chk_col2, chk_col3 = st.columns(3)
         selected_tasks = []
         
@@ -55,32 +56,62 @@ with tab1:
             if st.checkbox("體溫"): selected_tasks.append("體溫")
             if st.checkbox("血壓"): selected_tasks.append("血壓")
             if st.checkbox("疼痛"): selected_tasks.append("疼痛")
+            if st.checkbox("EKG"): selected_tasks.append("EKG")
         with chk_col2:
             if st.checkbox("呼吸"): selected_tasks.append("呼吸")
             if st.checkbox("血氧"): selected_tasks.append("血氧")
             if st.checkbox("病解"): selected_tasks.append("病解")
+            if st.checkbox("NG"): selected_tasks.append("NG")
         with chk_col3:
             if st.checkbox("on cath"): selected_tasks.append("on cath")
-            if st.checkbox("EKG"): selected_tasks.append("EKG")
-            if st.checkbox("其他"): selected_tasks.append("其他")
+            if st.checkbox("Foley"): selected_tasks.append("Foley")
+            # 「其他」改為變數，方便下方判斷是否展開輸入框
+            other_check = st.checkbox("其他")
+            
+        # 展開「其他」的輸入框
+        other_text = ""
+        if other_check:
+            other_text = st.text_input("輸入其他待做事項", placeholder="例如: 觀察過敏反應、紀錄 I/O...")
             
         st.markdown(" ")
+        
+        # 抽血專區
         blood_draw = st.checkbox("💉 抽血")
         blood_tests = ""
         if blood_draw:
             blood_tests = st.text_input("輸入檢驗項目", placeholder="例如: CBC, SMA, Trop-I...")
+
+        # 傷口護理專區
+        wound_care = st.checkbox("🩹 傷口護理")
+        wound_details = ""
+        if wound_care:
+            wound_details = st.text_input("輸入換藥部位與方式", placeholder="例如: 右小腿擦傷，CD...")
 
         st.markdown("---")
         
         time_str = st.text_input("設定執行時間 (輸入4碼數字，例如: 0312 或 1530)", max_chars=4, placeholder="0312")
 
         if st.button("新增提醒", use_container_width=True, type="primary"):
+            # 處理各種需要自行輸入文字的選項
+            if other_check:
+                if other_text.strip() == "":
+                    selected_tasks.append("其他")
+                else:
+                    selected_tasks.append(f"其他({other_text})")
+            
             if blood_draw:
                 if blood_tests.strip() == "":
                     selected_tasks.append("抽血")
                 else:
                     selected_tasks.append(f"抽血({blood_tests})")
+                    
+            if wound_care:
+                if wound_details.strip() == "":
+                    selected_tasks.append("傷口護理")
+                else:
+                    selected_tasks.append(f"傷口護理({wound_details})")
 
+            # 防呆驗證機制
             if not bed_num:
                 st.error("⚠️ 請填寫或選擇床號！")
             elif not selected_tasks:
@@ -105,7 +136,7 @@ with tab1:
                         "task": task_str,
                         "target_time": target_dt,
                         "status": "pending",
-                        "actual_time": None # 新增實際完成時間欄位
+                        "actual_time": None
                     })
                     st.success(f"✅ 已成功新增 {bed_num} 的 【{task_str}】")
                 except ValueError:
@@ -117,8 +148,6 @@ with tab1:
         with header_col1:
             st.subheader("📋 待辦任務看板")
         with header_col2:
-            # 清除按鈕改為只清除「未完成」的任務，或者您可以保留原本清除已完成的邏輯
-            # 這裡為了收集資料，我們建議交班後直接從後台匯出，前台只需專注執行
             pass 
 
         now_tw = datetime.datetime.now(tw_tz)
@@ -153,7 +182,6 @@ with tab1:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("✅ 完成", key=f"done_{original_idx}", use_container_width=True):
                             st.session_state.tasks[original_idx]["status"] = "done"
-                            # 關鍵更新：記錄按下按鈕的精準時間
                             st.session_state.tasks[original_idx]["actual_time"] = datetime.datetime.now(tw_tz)
                             st.rerun()
 
@@ -168,13 +196,11 @@ with tab2:
     if not done_tasks:
         st.info("目前尚無已完成的任務紀錄。")
     else:
-        # 1. 計算數據指標
         total_done = len(done_tasks)
         on_time_count = sum(1 for t in done_tasks if t["actual_time"] <= t["target_time"])
         overdue_count = total_done - on_time_count
-        on_time_rate = round((on_time_count / total_done) * 100, 1)
+        on_time_rate = round((on_time_count / total_done) * 100, 1) if total_done > 0 else 0
 
-        # 顯示儀表板
         met_col1, met_col2, met_col3, met_col4 = st.columns(4)
         met_col1.metric("總完成任務數", f"{total_done} 件")
         met_col2.metric("✅ 準時完成", f"{on_time_count} 件")
@@ -183,14 +209,11 @@ with tab2:
         
         st.markdown("---")
         
-        # 2. 準備匯出成 Excel 可讀的 CSV 格式
         df_data = []
         for t in done_tasks:
             target_str = t['target_time'].strftime('%Y-%m-%d %H:%M')
             actual_str = t['actual_time'].strftime('%Y-%m-%d %H:%M:%S')
             is_on_time = "是" if t['actual_time'] <= t['target_time'] else "否"
-            
-            # 計算提早或延遲的具體分鐘數
             diff_mins = round((t['actual_time'] - t['target_time']).total_seconds() / 60, 1)
             
             df_data.append({
@@ -199,15 +222,12 @@ with tab2:
                 "目標時間": target_str,
                 "實際完成時間": actual_str,
                 "是否準時": is_on_time,
-                "時間差(分鐘)": diff_mins # 負數代表提早，正數代表延遲
+                "時間差(分鐘)": diff_mins 
             })
             
         df = pd.DataFrame(df_data)
-        
-        # 在網頁上預覽表格
         st.dataframe(df, use_container_width=True)
         
-        # 3. 匯出按鈕 (utf-8-sig 確保 Excel 繁體中文不亂碼)
         csv = df.to_csv(index=False).encode('utf-8-sig')
         current_date_str = datetime.datetime.now(tw_tz).strftime("%Y%m%d_%H%M")
         
@@ -218,5 +238,3 @@ with tab2:
             mime="text/csv",
             type="primary"
         )
-        
-        st.markdown("*(💡 提示：建議在早上 08:00 交班前點擊下載，若網頁長時間關閉或重新整理，暫存紀錄可能會被清空)*")
