@@ -1,9 +1,12 @@
 import streamlit as st
 import datetime
+from datetime import timezone, timedelta
 
 # --- 網頁基礎設定 ---
-# 必須設定為 wide 模式，左右分欄才不會太擠
 st.set_page_config(page_title="ER 大夜班提示器", layout="wide")
+
+# 強制設定為台灣時區 (UTC+8)
+tw_tz = timezone(timedelta(hours=8))
 
 # 初始化 session_state
 if 'tasks' not in st.session_state:
@@ -40,7 +43,7 @@ with col_left:
     st.markdown("---")
     st.markdown("##### 📌 勾選待做事項")
     
-    # 2. 待辦事項勾選區 (使用欄位排列較省空間)
+    # 2. 待辦事項勾選區
     chk_col1, chk_col2, chk_col3 = st.columns(3)
     selected_tasks = []
     
@@ -57,7 +60,6 @@ with col_left:
         if st.checkbox("EKG"): selected_tasks.append("EKG")
         if st.checkbox("其他"): selected_tasks.append("其他")
         
-    # 抽血獨立區塊：若勾選則跳出文字輸入框
     st.markdown(" ")
     blood_draw = st.checkbox("💉 抽血")
     blood_tests = ""
@@ -66,13 +68,12 @@ with col_left:
 
     st.markdown("---")
     
-    # 3. 時間設定與送出
-    now = datetime.datetime.now()
-    default_time = (now + datetime.timedelta(hours=2)).time()
+    # 3. 時間設定與送出 (套用台灣時區)
+    now_tw = datetime.datetime.now(tw_tz)
+    default_time = (now_tw + datetime.timedelta(hours=2)).time()
     target_time_input = st.time_input("設定提醒時間 (24小時制)", value=default_time)
 
     if st.button("新增提醒", use_container_width=True, type="primary"):
-        # 處理抽血字串
         if blood_draw:
             if blood_tests.strip() == "":
                 selected_tasks.append("抽血")
@@ -84,13 +85,15 @@ with col_left:
         elif not selected_tasks:
             st.error("⚠️ 請至少勾選一項待做事項！")
         else:
-            target_dt = datetime.datetime.combine(now.date(), target_time_input)
-            if target_dt < now:
+            # 將選擇的時間與今天的日期結合，並賦予台灣時區屬性
+            target_dt = datetime.datetime.combine(now_tw.date(), target_time_input).replace(tzinfo=tw_tz)
+            
+            # 跨日邏輯：如果設定的時間比現在早，代表是設定到隔天 (例如 23:00 設定 02:00)
+            if target_dt < now_tw:
                 target_dt += datetime.timedelta(days=1)
                 
             task_str = "、".join(selected_tasks) 
             
-            # 加入任務清單
             st.session_state.tasks.append({
                 "bed": bed_num,
                 "task": task_str,
@@ -107,37 +110,47 @@ with col_right:
     with header_col1:
         st.subheader("📋 待辦任務看板")
     with header_col2:
-        if st.button("🧹 清除已完成", use_container_width=True):
+        # 清除按鈕只清除 "已完成" 的任務，保留未完成的
+        if st.button("🧹 清除紀錄", use_container_width=True):
             st.session_state.tasks = [t for t in st.session_state.tasks if t["status"] == "pending"]
             st.rerun()
 
-    now = datetime.datetime.now()
+    now_tw = datetime.datetime.now(tw_tz)
     active_tasks = [t for t in st.session_state.tasks if t["status"] == "pending"]
 
+    # 顯示未完成任務
     if not active_tasks:
-        st.info("🎉 目前沒有待辦任務，可以趁機補個紀錄或喝口水！")
+        st.info("🎉 目前沒有待辦任務！")
     else:
-        # 智慧排序：把快要超時或已經超時的任務排在最上面
         sorted_tasks = sorted(
             [(idx, t) for idx, t in enumerate(st.session_state.tasks) if t["status"] == "pending"],
             key=lambda x: x[1]["target_time"]
         )
         
         for original_idx, task in sorted_tasks:
-            time_diff = task["target_time"] - now
+            time_diff = task["target_time"] - now_tw
             is_overdue = time_diff.total_seconds() <= 0
 
-            # 用框線卡片包裝任務，視覺更像 Kanban 看板
             with st.container(border=True):
                 task_col1, task_col2 = st.columns([4, 1])
                 with task_col1:
                     if is_overdue:
-                        st.error(f"🚨 **超時提醒！** 【{task['bed']}】 - {task['task']} (設定時間: {task['target_time'].strftime('%H:%M')})")
+                        st.error(f"🚨 **超時提醒！** 【{task['bed']}】 - {task['task']} (設定: {task['target_time'].strftime('%H:%M')})")
                     else:
                         mins_left = int(time_diff.total_seconds() / 60)
-                        st.warning(f"⏳ **倒數 {mins_left} 分鐘** 【{task['bed']}】 - {task['task']} (設定時間: {task['target_time'].strftime('%H:%M')})")
+                        st.warning(f"⏳ **倒數 {mins_left} 分鐘** 【{task['bed']}】 - {task['task']} (設定: {task['target_time'].strftime('%H:%M')})")
                 with task_col2:
-                    # 點擊完成後直接更新狀態並重整網頁
                     if st.button("✅ 完成", key=f"done_{original_idx}", use_container_width=True):
                         st.session_state.tasks[original_idx]["status"] = "done"
                         st.rerun()
+
+    # --- 新增：已完成任務紀錄區塊 ---
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("📜 已完成任務紀錄 (點擊展開查看)"):
+        done_tasks = [t for t in st.session_state.tasks if t["status"] == "done"]
+        if not done_tasks:
+            st.caption("目前尚無已完成的紀錄。")
+        else:
+            # 依照完成的先後順序顯示
+            for t in done_tasks:
+                st.success(f"✔️ 【{t['bed']}】已完成：{t['task']} (原設定: {t['target_time'].strftime('%H:%M')})")
