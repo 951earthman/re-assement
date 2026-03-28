@@ -8,20 +8,26 @@ import os
 import uuid
 
 # --- 網頁基礎設定 ---
-st.set_page_config(page_title="🚨 ER 提示器", layout="wide", initial_sidebar_state="expanded")
+# 將 initial_sidebar_state 設為 collapsed，讓 iPad 打開時預設收合左側欄
+st.set_page_config(page_title="🚨 ER 提示器", layout="wide", initial_sidebar_state="collapsed")
 tw_tz = timezone(timedelta(hours=8))
 DATA_FILE = "er_tasks_data.json"
 
 # ==========================================
-# 側邊欄：保護聲明與著作權
+# 側邊欄：保護聲明與著作權 (加入摺疊功能)
 # ==========================================
 with st.sidebar:
-    st.header("⚖️ 系統保護聲明")
-    st.warning("⚠️ **免責聲明**\n\n本系統僅供臨床交班與待辦事項輔助提醒，**並非正式醫療紀錄（HIS）系統**。所有醫療處置、給藥時間與醫囑變更，請一律以醫院主系統與醫師正式醫囑為準。")
-    st.info("💡 **資料隱私**\n\n本系統為便利交班之輔助工具，請盡量以「床號」代替病患全名，切勿輸入敏感個資。")
+    st.header("⚖️ 系統資訊")
+    
+    # 用 expander 將長篇幅的聲明收合起來
+    with st.expander("📝 展開查看保護與隱私聲明", expanded=False):
+        st.warning("⚠️ **免責聲明**\n\n本系統僅供臨床交班與待辦事項輔助提醒，**並非正式醫療紀錄（HIS）系統**。所有醫療處置、給藥時間與醫囑變更，請一律以醫院主系統與醫師正式醫囑為準。")
+        st.info("💡 **資料隱私**\n\n本系統為便利交班之輔助工具，請盡量以「床號」代替病患全名，切勿輸入身分證字號等敏感個資，以符合 HIPAA 及相關隱私法規。")
+    
     st.markdown("---")
-    st.markdown("##### 👨‍⚕️ 系統資訊")
+    st.markdown("##### 👨‍⚕️ 開發者資訊")
     st.markdown("© 2026 Developed by **護理師 吳智弘** \n*(花蓮慈濟醫學中心 急診部)*")
+    st.caption("All Rights Reserved.\n僅供單位內部輔助使用，未經授權請勿作商業用途。")
 
 # ==========================================
 # 醫院 ISO 常規時間對照表 (24小時制)
@@ -205,7 +211,6 @@ with tab1:
         elif filter_zone != "全區顯示": active_tasks = [t for t in active_tasks if t.get('area') == filter_zone]
         if filter_task != "全部顯示": active_tasks = [t for t in active_tasks if filter_task in t['task']]
 
-        # 只要時間小於 30 分鐘 (包含進入綠燈、黃燈、紅燈)，網頁就會閃爍提醒
         has_alert = any((t["target_time"] - now_tw).total_seconds() / 60 <= 30 for t in active_tasks)
 
         if not active_tasks: st.info("🎉 目前此條件下無待辦任務！")
@@ -225,19 +230,14 @@ with tab1:
                     with task_col1:
                         display_text = f"📍 **{task['bed']}** - {task['task']}{freq_badge}\n\n🕒 設定時間: {task['target_time'].strftime('%H:%M')}"
                         
-                        # --- 重新定義的四段燈號 (完全符合臨床 90 分鐘合格區間) ---
                         if diff_mins > 30:
-                            # 提早超過半小時
                             st.markdown(f"⚪ **尚未到期** (距離執行還有 {int(diff_mins)} 分)<br>📍 **{task['bed']}** - {task['task']}{freq_badge}<br>🕒 設定時間: {task['target_time'].strftime('%H:%M')}", unsafe_allow_html=True)
                         elif 0 <= diff_mins <= 30:
-                            # 提早半小時以內 (進入合格區間，準備執行)
                             st.success(f"🟢 **可開始執行** (提前 {int(diff_mins)} 分內)\n\n{display_text}")
                         elif -60 <= diff_mins < 0:
-                            # 延遲 60 分鐘以內 (仍在合格區間內)
                             grace_left = 60 - int(abs(diff_mins))
                             st.warning(f"🟡 **執行區間內** (距超時剩 {grace_left} 分)\n\n{display_text}")
                         else:
-                            # 延遲超過 60 分鐘 (真正超時)
                             overdue_mins = int(abs(diff_mins)) - 60
                             st.error(f"🔴 **嚴重超時** (超過合格範圍 {overdue_mins} 分)\n\n{display_text}")
 
@@ -246,7 +246,6 @@ with tab1:
                         cancel_key = f"confirm_cancel_{task['id']}"
                         reason_key = f"require_reason_{task['id']}"
                         
-                        # --- 狀態 1：顯示原因填寫表單 (因為超出合格範圍被攔截) ---
                         if st.session_state.get(reason_key, False):
                             st.warning("⚠️ 執行時間異常，請選擇原因：")
                             reason_opt = st.selectbox("異常原因", ["1.依照醫囑延後、提前", "2.病人不在位置上", "3.遺漏執行完成登錄", "4.因忙碌忘記執行", "5.其他 (自行輸入)"], key=f"sel_{task['id']}")
@@ -273,7 +272,6 @@ with tab1:
                             if sub_c2.button("取消", key=f"back_{task['id']}"):
                                 st.session_state[reason_key] = False; st.rerun()
 
-                        # --- 狀態 2：顯示取消確認表單 ---
                         elif st.session_state.get(cancel_key, False):
                             st.error("確定取消此醫囑？")
                             if st.button("⭕ 確定", key=f"yes_cancel_{task['id']}", use_container_width=True):
@@ -284,10 +282,8 @@ with tab1:
                             if st.button("返回", key=f"no_cancel_{task['id']}", use_container_width=True):
                                 st.session_state[cancel_key] = False; st.rerun()
 
-                        # --- 狀態 3：預設狀態 (正常按鈕) ---
                         else:
                             if st.button("✅ 完成", key=f"done_{task['id']}", use_container_width=True):
-                                # 攔截條件：延遲超過 60分 (diff_mins < -60) 或 提早超過 30分 (diff_mins > 30)
                                 if diff_mins < -60 or diff_mins > 30:
                                     st.session_state[reason_key] = True
                                     st.rerun()
@@ -343,9 +339,7 @@ with tab_dash:
     if not dash_tasks: st.success("🎉 目前全單位沒有任何待辦任務，系統清空，完美交班！")
     else:
         total_active = len(dash_tasks)
-        # 超時：延遲超過 60 分鐘 (< -60)
         overdue_cnt = sum(1 for t in dash_tasks if (t['target_time'] - now_tw).total_seconds() / 60 < -60)
-        # 合格執行區間：提早 30 分鐘 到 延遲 60 分鐘內 (-60 <= x <= 30)
         warning_cnt = sum(1 for t in dash_tasks if -60 <= (t['target_time'] - now_tw).total_seconds() / 60 <= 30)
         safe_cnt = total_active - overdue_cnt - warning_cnt
         
@@ -414,7 +408,6 @@ with tab3:
         cancelled_tasks = [t for t in st.session_state.tasks if t["status"] == "cancelled"]
         
         total_done = len(done_tasks)
-        # 後台達標標準對齊：提早 30 分 到 延遲 60 分鐘內 (-30 <= actual-target <= 60)
         on_time_count = sum(1 for t in done_tasks if -30 <= (t["actual_time"] - t["target_time"]).total_seconds() / 60 <= 60)
         on_time_rate = round((on_time_count / total_done) * 100, 1) if total_done > 0 else 0
 
@@ -427,7 +420,6 @@ with tab3:
         df_data = []
         for t in (done_tasks + cancelled_tasks):
             diff_mins = round((t['actual_time'] - t['target_time']).total_seconds() / 60, 1)
-            # 後台報表判定文字同步更新
             status_str = "已取消 (DC)" if t['status'] == 'cancelled' else ("是" if -30 <= diff_mins <= 60 else "否")
             df_data.append({
                 "狀態": "完成" if t['status'] == 'done' else "取消",
