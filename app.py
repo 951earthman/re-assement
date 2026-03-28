@@ -21,7 +21,7 @@ with st.sidebar:
     st.info("💡 **資料隱私**\n\n本系統為便利交班之輔助工具，請盡量以「床號」代替病患全名，切勿輸入身分證字號等敏感個資，以符合 HIPAA 及相關隱私法規。")
     st.markdown("---")
     st.markdown("##### 👨‍⚕️ 系統資訊")
-    st.markdown("© 2026 Developed by **Alex** \n*(Hualien Tzu Chi ER)*")
+    st.markdown("© 2026 Developed by **急診護理師 吳智弘** \n*(Hualien Tzu Chi ER)*")
     st.caption("All Rights Reserved. 僅供單位內部輔助使用，未經授權請勿作商業用途。")
 
 # ==========================================
@@ -110,7 +110,8 @@ with sync_col:
     if st.button("🔄 同步最新資料", use_container_width=True):
         st.rerun()
 
-tab1, tab2, tab3 = st.tabs(["🏥 臨床待辦看板", "📝 歷史紀錄 (完成/已取消)", "📊 後台數據追蹤 (管理員)"])
+# --- 新增了第二個分頁：全觀儀表板 ---
+tab1, tab_dash, tab2, tab3 = st.tabs(["🏥 臨床待辦看板", "👁️ 單位總覽儀表板", "📝 歷史紀錄 (完成/取消)", "📊 後台數據追蹤 (管理員)"])
 
 # ------------------------------------------
 # 分頁 1：臨床待辦看板
@@ -174,7 +175,7 @@ with tab1:
         if wound_care:
             wound_details = st.text_input("輸入換藥部位與方式", placeholder="例如: 右小腿擦傷 CD...")
 
-        # --- 新增：特殊檢查與排程專區 ---
+        # --- 特殊檢查與排程專區 ---
         st.markdown("---")
         st.markdown("##### 🔬 特殊檢查與排程")
         
@@ -183,7 +184,6 @@ with tab1:
             radio_exam = st.checkbox("☢️ 放射科檢查")
             radio_items = []
             if radio_exam:
-                # 拔除放射科的排程 checkbox，因為通常直掛 HIS 不用特地聯絡排程
                 radio_items = st.multiselect("選擇放射科項目", ["X光", "CT", "MRI"])
                 
         with exam_col2:
@@ -200,7 +200,6 @@ with tab1:
         time_str = st.text_input("設定首次執行時間 (輸入4碼，例如: 0312)", max_chars=4, placeholder="0312")
 
         if st.button("新增提醒", use_container_width=True, type="primary"):
-            # 處理字串邏輯
             if on_cath_check:
                 if remove_old_cath and old_cath_location.strip():
                     selected_tasks.append(f"on cath(移除舊:{old_cath_location})")
@@ -216,21 +215,15 @@ with tab1:
             if wound_care and wound_details.strip(): selected_tasks.append(f"傷口護理({wound_details})")
             elif wound_care: selected_tasks.append("傷口護理")
 
-            # 處理特殊檢查排程字串 (修正放射科不需要排程的邏輯)
             if radio_exam:
-                if radio_items:
-                    selected_tasks.append(f"放射科檢查({','.join(radio_items)})")
-                else:
-                    selected_tasks.append("放射科檢查")
+                if radio_items: selected_tasks.append(f"放射科檢查({','.join(radio_items)})")
+                else: selected_tasks.append("放射科檢查")
                     
             if endo_exam:
                 sch_str = "已排程" if endo_scheduled else "未排程"
-                if endo_items:
-                    selected_tasks.append(f"消化內視鏡({','.join(endo_items)} - {sch_str})")
-                else:
-                    selected_tasks.append(f"消化內視鏡({sch_str})")
+                if endo_items: selected_tasks.append(f"消化內視鏡({','.join(endo_items)} - {sch_str})")
+                else: selected_tasks.append(f"消化內視鏡({sch_str})")
 
-            # 防呆驗證
             if not full_bed_name.strip() or full_bed_name == "【FRee】":
                 st.error("⚠️ 請填寫或選擇床號！")
             elif not selected_tasks:
@@ -273,7 +266,6 @@ with tab1:
             zone_options = ["全區顯示", "🏥 診間全區", "🛏️ OBS全區"] + list(BED_MAP.keys())
             filter_zone = st.selectbox("📍 依區域過濾", zone_options)
         with filt_col2:
-            # 展開所有可過濾的項目清單
             all_filter_options = [
                 "體溫", "血壓", "疼痛", "EKG", "呼吸", "血氧", "病解", "NG", "on cath", 
                 "Foley", "測血糖", "抽血", "傷口護理", "放射科檢查", "消化內視鏡", "其他"
@@ -389,11 +381,72 @@ with tab1:
             """, height=0, width=0)
 
 # ------------------------------------------
-# 分頁 2：歷史紀錄 (完成與取消區)
+# 分頁 2 (新增)：全觀儀表板 (Leader 上帝視角)
+# ------------------------------------------
+with tab_dash:
+    st.subheader("👁️ ER 全單位待辦戰情中心")
+    now_tw = datetime.datetime.now(tw_tz)
+    
+    dash_tasks = [t for t in st.session_state.tasks if t["status"] == "pending"]
+    
+    if not dash_tasks:
+        st.success("🎉 目前全單位沒有任何待辦任務，系統清空，完美交班！")
+    else:
+        # 計算戰力指標
+        total_active = len(dash_tasks)
+        overdue_cnt = sum(1 for t in dash_tasks if (t['target_time'] - now_tw).total_seconds() / 60 <= 0)
+        warning_cnt = sum(1 for t in dash_tasks if 0 < (t['target_time'] - now_tw).total_seconds() / 60 <= 30)
+        safe_cnt = total_active - overdue_cnt - warning_cnt
+        
+        # 1. 頂部四大指標
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("🏥 總待辦任務", f"{total_active} 件")
+        m2.metric("🚨 已超時 (需優先處理)", f"{overdue_cnt} 件")
+        m3.metric("🟢 30分內即將到期", f"{warning_cnt} 件")
+        m4.metric("⚪ 尚未到期 (>30分)", f"{safe_cnt} 件")
+        
+        st.markdown("---")
+        
+        dash_col1, dash_col2 = st.columns(2)
+        
+        # 2. 區域塞車排行 (長條圖)
+        with dash_col1:
+            st.markdown("##### 📍 各區域待辦數量分佈")
+            area_counts = {}
+            for t in dash_tasks:
+                a = t.get('area', '未知區')
+                area_counts[a] = area_counts.get(a, 0) + 1
+            
+            if area_counts:
+                df_area = pd.DataFrame(list(area_counts.items()), columns=['區域', '任務數']).set_index('區域')
+                st.bar_chart(df_area)
+
+        # 3. 處置熱點排行 (長條圖)
+        with dash_col2:
+            st.markdown("##### 🩺 待辦處置熱點統計")
+            # 統計關鍵字出現次數
+            keywords = ["抽血", "測血糖", "EKG", "on cath", "傷口護理", "放射科", "內視鏡", "Foley", "NG"]
+            kw_counts = {kw: 0 for kw in keywords}
+            
+            for t in dash_tasks:
+                for kw in keywords:
+                    if kw in t['task']:
+                        kw_counts[kw] += 1
+                        
+            # 過濾掉 0 的項目
+            active_kw_counts = {k: v for k, v in kw_counts.items() if v > 0}
+            
+            if active_kw_counts:
+                df_kw = pd.DataFrame(list(active_kw_counts.items()), columns=['處置項目', '數量']).set_index('處置項目')
+                st.bar_chart(df_kw)
+            else:
+                st.info("目前無特殊處置項目待辦。")
+
+# ------------------------------------------
+# 分頁 3：歷史紀錄 (完成與取消區)
 # ------------------------------------------
 with tab2:
     st.subheader("📝 歷史紀錄 (點錯可隨時復原)")
-    
     history_tasks = [t for t in st.session_state.tasks if t["status"] in ["done", "cancelled"]]
     
     if not history_tasks:
@@ -405,12 +458,10 @@ with tab2:
                 col1, col2 = st.columns([5, 1])
                 with col1:
                     freq_badge = f" 🔁 **{task['freq']}**" if task['freq'] != "單次" else ""
-                    
                     if task["status"] == "done":
                         st.success(f"✔️ **{task['bed']}** 已完成：{task['task']}{freq_badge}\n\n🕒 原設定: {task['target_time'].strftime('%H:%M')} ｜ 實際操作: {task['actual_time'].strftime('%H:%M')}")
                     else:
                         st.error(f"🚫 **{task['bed']}** **已取消醫囑**：{task['task']}{freq_badge}\n\n🕒 原設定: {task['target_time'].strftime('%H:%M')} ｜ 實際操作: {task['actual_time'].strftime('%H:%M')}")
-                        
                 with col2:
                     st.markdown("<br>", unsafe_allow_html=True)
                     if st.button("↩️ 復原", key=f"undo_{task['id']}", use_container_width=True):
@@ -424,7 +475,7 @@ with tab2:
                         st.rerun()
 
 # ------------------------------------------
-# 分頁 3：後台數據追蹤與匯出
+# 分頁 4：後台數據追蹤與匯出
 # ------------------------------------------
 with tab3:
     st.subheader("🔒 管理員專區")
