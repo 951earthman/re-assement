@@ -55,7 +55,7 @@ def get_next_iso_time(base_time, freq):
     return next_time
 
 # ==========================================
-# 床位與分區設定字典 (完全依照您的規格)
+# 床位與分區設定字典
 # ==========================================
 BED_MAP = {
     "第三診間區": ["5", "6", "39"] + [str(i) for i in range(27, 34)],
@@ -69,7 +69,7 @@ BED_MAP = {
 }
 
 # ==========================================
-# 資料庫 (JSON 讀寫功能 - 加入 area 屬性防呆)
+# 資料庫 (JSON 讀寫功能)
 # ==========================================
 def load_tasks():
     if not os.path.exists(DATA_FILE): return []
@@ -81,7 +81,7 @@ def load_tasks():
                 if d.get('actual_time'):
                     d['actual_time'] = datetime.datetime.fromisoformat(d['actual_time'])
                 if 'freq' not in d: d['freq'] = '單次'
-                if 'area' not in d: d['area'] = '舊版資料' # 相容舊資料
+                if 'area' not in d: d['area'] = '舊版資料'
             return data
     except:
         return []
@@ -124,15 +124,13 @@ with tab1:
         area = st.selectbox("選擇分區", list(BED_MAP.keys()))
         if area == "FRee (自行輸入)":
             bed_num = st.text_input("輸入名稱/床號", placeholder="例如: 走廊 王大明")
-            # 格式化顯示名稱
             full_bed_name = f"【FRee】{bed_num}" if bed_num else ""
         else:
             bed_select = st.selectbox("選擇床號", BED_MAP[area])
-            # 格式化顯示名稱，例如 【OBS 1】35床
             full_bed_name = f"【{area}】{bed_select}床"
 
         st.markdown("---")
-        st.markdown("##### 📌 勾選待做事項")
+        st.markdown("##### 📌 勾選常規待做事項")
         
         chk_col1, chk_col2, chk_col3 = st.columns(3)
         selected_tasks = []
@@ -176,15 +174,36 @@ with tab1:
         if wound_care:
             wound_details = st.text_input("輸入換藥部位與方式", placeholder="例如: 右小腿擦傷 CD...")
 
+        # --- 新增：特殊檢查與排程專區 ---
+        st.markdown("---")
+        st.markdown("##### 🔬 特殊檢查與排程")
+        
+        exam_col1, exam_col2 = st.columns(2)
+        with exam_col1:
+            radio_exam = st.checkbox("☢️ 放射科檢查")
+            radio_items = []
+            if radio_exam:
+                # 拔除放射科的排程 checkbox，因為通常直掛 HIS 不用特地聯絡排程
+                radio_items = st.multiselect("選擇放射科項目", ["X光", "CT", "MRI"])
+                
+        with exam_col2:
+            endo_exam = st.checkbox("🩺 內視鏡/超音波")
+            endo_items = []
+            endo_scheduled = False
+            if endo_exam:
+                endo_items = st.multiselect("選擇檢查項目", ["胃鏡", "大腸鏡", "腹部超音波", "腎臟超音波"])
+                endo_scheduled = st.checkbox("✅ 已完成排程", key="endo_sch")
+
         st.markdown("---")
         
         freq_option = st.selectbox("🔄 執行頻率 (常規醫囑)", ["單次", "Q2H", "Q4H", "Q6H", "Q8H", "BIDAC", "QIDAC"])
         time_str = st.text_input("設定首次執行時間 (輸入4碼，例如: 0312)", max_chars=4, placeholder="0312")
 
         if st.button("新增提醒", use_container_width=True, type="primary"):
+            # 處理字串邏輯
             if on_cath_check:
                 if remove_old_cath and old_cath_location.strip():
-                    selected_tasks.append(f"on cath (移除舊: {old_cath_location})")
+                    selected_tasks.append(f"on cath(移除舊:{old_cath_location})")
                 else:
                     selected_tasks.append("on cath")
 
@@ -197,6 +216,21 @@ with tab1:
             if wound_care and wound_details.strip(): selected_tasks.append(f"傷口護理({wound_details})")
             elif wound_care: selected_tasks.append("傷口護理")
 
+            # 處理特殊檢查排程字串 (修正放射科不需要排程的邏輯)
+            if radio_exam:
+                if radio_items:
+                    selected_tasks.append(f"放射科檢查({','.join(radio_items)})")
+                else:
+                    selected_tasks.append("放射科檢查")
+                    
+            if endo_exam:
+                sch_str = "已排程" if endo_scheduled else "未排程"
+                if endo_items:
+                    selected_tasks.append(f"消化內視鏡({','.join(endo_items)} - {sch_str})")
+                else:
+                    selected_tasks.append(f"消化內視鏡({sch_str})")
+
+            # 防呆驗證
             if not full_bed_name.strip() or full_bed_name == "【FRee】":
                 st.error("⚠️ 請填寫或選擇床號！")
             elif not selected_tasks:
@@ -217,7 +251,7 @@ with tab1:
                     current_tasks = load_tasks()
                     current_tasks.append({
                         "id": str(uuid.uuid4()),
-                        "area": area,           # 精準記憶所屬區域，後續過濾不怕文字重疊
+                        "area": area,
                         "bed": full_bed_name,
                         "task": task_str,
                         "target_time": target_dt,
@@ -236,22 +270,24 @@ with tab1:
         
         filt_col1, filt_col2 = st.columns(2)
         with filt_col1:
-            # 將區域過濾改為單選，並加入「大區塊」選項
             zone_options = ["全區顯示", "🏥 診間全區", "🛏️ OBS全區"] + list(BED_MAP.keys())
             filter_zone = st.selectbox("📍 依區域過濾", zone_options)
         with filt_col2:
-            filter_tasks = st.multiselect("🩺 依項目過濾", ["抽血", "測血糖", "EKG", "on cath", "傷口護理", "給藥"], placeholder="顯示全部項目")
+            # 展開所有可過濾的項目清單
+            all_filter_options = [
+                "體溫", "血壓", "疼痛", "EKG", "呼吸", "血氧", "病解", "NG", "on cath", 
+                "Foley", "測血糖", "抽血", "傷口護理", "放射科檢查", "消化內視鏡", "其他"
+            ]
+            filter_tasks = st.multiselect("🩺 依項目過濾", all_filter_options, placeholder="顯示全部項目")
 
         now_tw = datetime.datetime.now(tw_tz)
         active_tasks = [t for t in st.session_state.tasks if t["status"] == "pending"]
 
-        # --- 應用精準的大區塊過濾邏輯 ---
         if filter_zone == "🏥 診間全區":
             active_tasks = [t for t in active_tasks if "診間" in t.get('area', '')]
         elif filter_zone == "🛏️ OBS全區":
             active_tasks = [t for t in active_tasks if "OBS" in t.get('area', '')]
         elif filter_zone != "全區顯示":
-            # 精確比對區域名稱，杜絕 OBS 3 掃到 OBS 35 的問題
             active_tasks = [t for t in active_tasks if t.get('area') == filter_zone]
 
         if filter_tasks:
@@ -284,7 +320,6 @@ with tab1:
                         else:
                             st.error(f"🔴 **嚴重超時** (超時 {int(abs(diff_mins))} 分)\n\n{display_text}")
 
-                    # --- 防呆取消與完成按鈕區塊 ---
                     with task_col2:
                         st.markdown("<br>", unsafe_allow_html=True)
                         cancel_key = f"confirm_cancel_{task['id']}"
@@ -300,7 +335,7 @@ with tab1:
                                             next_time = get_next_iso_time(t['target_time'], t['freq'])
                                             current_tasks.append({
                                                 "id": str(uuid.uuid4()),
-                                                "area": t.get('area'), # 傳承 area 屬性
+                                                "area": t.get('area'),
                                                 "bed": t['bed'], "task": t['task'], "target_time": next_time,
                                                 "status": "pending", "actual_time": None, "freq": t['freq']
                                             })
