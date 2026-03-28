@@ -12,10 +12,6 @@ tw_tz = timezone(timedelta(hours=8))
 if 'tasks' not in st.session_state:
     st.session_state.tasks = []
 
-# 初始化時間輸入框的預設記憶（避免勾選選單時時間被重置）
-if 'target_time_input' not in st.session_state:
-    st.session_state.target_time_input = datetime.datetime.now(tw_tz).time()
-
 st.title("🚨 急診留觀：智能待辦與交班提示器")
 
 # --- 版面左右分割 ---
@@ -71,8 +67,8 @@ with col_left:
 
     st.markdown("---")
     
-    # 3. 時間設定與送出 (綁定 key 來鎖定記憶，不會亂跳)
-    st.time_input("設定執行時間 (24小時制)", key="target_time_input")
+    # 3. 直覺式 4 碼時間輸入框
+    time_str = st.text_input("設定執行時間 (輸入4碼數字，例如: 0312 或 1530)", max_chars=4, placeholder="0312")
 
     if st.button("新增提醒", use_container_width=True, type="primary"):
         if blood_draw:
@@ -81,29 +77,40 @@ with col_left:
             else:
                 selected_tasks.append(f"抽血({blood_tests})")
 
+        # --- 防呆驗證機制 ---
         if not bed_num:
             st.error("⚠️ 請填寫或選擇床號！")
         elif not selected_tasks:
             st.error("⚠️ 請至少勾選一項待做事項！")
+        elif len(time_str) != 4 or not time_str.isdigit():
+            st.error("⚠️ 請輸入4位純數字的時間格式，例如 0312！")
         else:
-            now_tw = datetime.datetime.now(tw_tz)
-            # 抓取鎖定住的使用者輸入時間
-            target_dt = datetime.datetime.combine(now_tw.date(), st.session_state.target_time_input).replace(tzinfo=tw_tz)
-            
-            # 跨日邏輯判定
-            if target_dt < now_tw - datetime.timedelta(hours=12): 
-                # 如果設定的時間比現在早超過12小時，通常代表是設定給「明天」的
-                target_dt += datetime.timedelta(days=1)
+            try:
+                # 將字串轉為時間格式 (前兩碼小時，後兩碼分鐘)
+                hour = int(time_str[:2])
+                minute = int(time_str[2:])
+                parsed_time = datetime.time(hour, minute)
                 
-            task_str = "、".join(selected_tasks) 
-            
-            st.session_state.tasks.append({
-                "bed": bed_num,
-                "task": task_str,
-                "target_time": target_dt,
-                "status": "pending"
-            })
-            st.success(f"✅ 已成功新增 {bed_num} 的 【{task_str}】")
+                now_tw = datetime.datetime.now(tw_tz)
+                target_dt = datetime.datetime.combine(now_tw.date(), parsed_time).replace(tzinfo=tw_tz)
+                
+                # 跨日邏輯判定 (設定的時間若比現在早12小時以上，視為明天)
+                if target_dt < now_tw - datetime.timedelta(hours=12): 
+                    target_dt += datetime.timedelta(days=1)
+                    
+                task_str = "、".join(selected_tasks) 
+                
+                st.session_state.tasks.append({
+                    "bed": bed_num,
+                    "task": task_str,
+                    "target_time": target_dt,
+                    "status": "pending"
+                })
+                st.success(f"✅ 已成功新增 {bed_num} 的 【{task_str}】")
+                
+            except ValueError:
+                # 抓出亂輸入的數字 (例如 2599)
+                st.error("⚠️ 時間格式錯誤！請確認小時(00-23)與分鐘(00-59)是否正確。")
 
 # ==========================================
 # 右半邊：待辦與四段變色看板區
@@ -140,23 +147,16 @@ with col_right:
                 with task_col1:
                     # 【四段變色邏輯】
                     if diff_mins > 30:
-                        # 1. 超過半小時：沒有底色
                         st.markdown(f"⚪ **尚未到期** (剩餘 {int(diff_mins)} 分鐘)<br>【{task['bed']}】 - {task['task']}<br>🕒 設定時間: {task['target_time'].strftime('%H:%M')}", unsafe_allow_html=True)
-                    
                     elif 0 < diff_mins <= 30:
-                        # 2. 進入半小時內：綠色底色
                         st.success(f"🟢 **即將執行** (剩餘 {int(diff_mins)} 分鐘)\n\n【{task['bed']}】 - {task['task']}\n\n🕒 設定時間: {task['target_time'].strftime('%H:%M')}")
-                    
                     elif -30 <= diff_mins <= 0:
-                        # 3. 超時半小時以內：黃色底色
                         st.warning(f"🟡 **已超時** (超時 {int(abs(diff_mins))} 分鐘)\n\n【{task['bed']}】 - {task['task']}\n\n🕒 設定時間: {task['target_time'].strftime('%H:%M')}")
-                    
                     else:
-                        # 4. 超時超過半小時：紅色底色
                         st.error(f"🔴 **嚴重超時** (超時 {int(abs(diff_mins))} 分鐘)\n\n【{task['bed']}】 - {task['task']}\n\n🕒 設定時間: {task['target_time'].strftime('%H:%M')}")
 
                 with task_col2:
-                    st.markdown("<br>", unsafe_allow_html=True) # 微調按鈕高度
+                    st.markdown("<br>", unsafe_allow_html=True)
                     if st.button("✅ 完成", key=f"done_{original_idx}", use_container_width=True):
                         st.session_state.tasks[original_idx]["status"] = "done"
                         st.rerun()
