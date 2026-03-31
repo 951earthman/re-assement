@@ -14,20 +14,16 @@ tw_tz = timezone(timedelta(hours=8))
 DATA_FILE = "er_tasks_data.json"
 
 # ==========================================
-# 核心升級：對齊台灣時間整點與半點的自動刷新
+# 對齊台灣時間整點與半點的自動刷新
 # ==========================================
 def get_ms_to_next_sync():
     now = datetime.datetime.now(tw_tz)
-    # 計算距離下一個 00分 或 30分 還剩多少秒
     if now.minute < 30:
         wait_seconds = (30 - now.minute) * 60 - now.second
     else:
         wait_seconds = (60 - now.minute) * 60 - now.second
-    
-    # 至少維持 10 秒以上，避免極端情況下連續重整
     return max(wait_seconds * 1000, 10000)
 
-# 動態設定重新整理的毫秒數
 refresh_ms = get_ms_to_next_sync()
 st_autorefresh(interval=refresh_ms, key="clock_sync_refresh")
 
@@ -122,7 +118,7 @@ with sync_col:
 tab1, tab_dash, tab2, tab3 = st.tabs(["🏥 臨床待辦看板", "👁️ 單位總覽儀表板", "📝 歷史紀錄 (完成/取消)", "📊 後台數據追蹤 (管理員)"])
 
 # ------------------------------------------
-# 分頁 1：臨床待辦看板 (精簡邏輯)
+# 分頁 1：臨床待辦看板
 # ------------------------------------------
 with tab1:
     col_left, col_right = st.columns([1, 1.2], gap="large")
@@ -183,8 +179,8 @@ with tab1:
             if other_check: selected_tasks.append(f"其他({other_text})")
             if blood_draw: selected_tasks.append(f"抽血({blood_tests})")
             if wound_care: selected_tasks.append(f"傷口護理({wound_details})")
-            if radio_exam: selected_tasks.append(f"放射科檢查({','.join(radio_items)})")
-            if endo_exam: selected_tasks.append(f"消化內視鏡({','.join(endo_items)} - {'已排' if endo_scheduled else '未排'})")
+            if radio_exam: selected_tasks.append(f"放射科檢查({','.join(radio_items)})" if radio_items else "放射科檢查")
+            if endo_exam: selected_tasks.append(f"消化內視鏡({','.join(endo_items)} - {'已排' if endo_scheduled else '未排'})" if endo_items else f"消化內視鏡({'已排' if endo_scheduled else '未排'})")
 
             if full_bed_name and selected_tasks and len(time_str) == 4:
                 try:
@@ -192,14 +188,24 @@ with tab1:
                     now_tw_dt = datetime.datetime.now(tw_tz)
                     target_dt = datetime.datetime.combine(now_tw_dt.date(), datetime.time(hour, minute)).replace(tzinfo=tw_tz)
                     if target_dt < now_tw_dt - datetime.timedelta(hours=12): target_dt += datetime.timedelta(days=1)
+                    
                     current_tasks = load_tasks()
                     current_tasks.append({
                         "id": str(uuid.uuid4()), "area": area, "bed": full_bed_name, "task": "、".join(selected_tasks),
                         "target_time": target_dt, "status": "pending", "actual_time": None, "reason": "",
                         "freq": freq_option, "freq_total": freq_count_limit, "freq_current": 1
                     })
-                    save_tasks(current_tasks); st.toast("✅ 已新增！"); st.rerun()
-                except: st.error("⚠️ 時間格式錯誤！")
+                    save_tasks(current_tasks)
+                    st.toast("✅ 已新增！")
+                    st.rerun() # 精準修復：確保不會被 generic except 攔截
+                except ValueError: 
+                    st.error("⚠️ 時間格式錯誤！請輸入正確的小時與分鐘。")
+                except Exception as e:
+                    # 如果是因為 st.rerun() 產生的例外，直接略過讓它重整
+                    if "rerun" in str(e).lower() or "RerunException" in str(type(e)):
+                        pass
+                    else:
+                        st.error(f"⚠️ 發生錯誤：{str(e)}")
 
     with col_right:
         st.subheader("📋 待辦任務看板")
@@ -233,8 +239,11 @@ with tab1:
 
                     with t_col2:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        reason_key, cancel_key = f"reason_{task['id']}", f"cancel_{task['id']}"
+                        reason_key = f"reason_{task['id']}"
+                        cancel_key = f"cancel_{task['id']}"
+                        transfer_key = f"transfer_{task['id']}" # 轉床專用語法
                         
+                        # --- 狀態 1：顯示原因填寫表單 ---
                         if st.session_state.get(reason_key, False):
                             st.warning("⚠️ 執行時間異常，請選擇原因：")
                             reason_opt = st.selectbox("原因", ["1.依照醫囑延後、提前", "2.病人不在位置上", "3.遺漏執行完成登錄", "4.因忙碌忘記執行", "5.其他"], key=f"sel_{task['id']}")
@@ -248,11 +257,42 @@ with tab1:
                                         if t['freq'] in ISO_SCHEDULE and t.get('freq_current', 1) < t.get('freq_total', 99):
                                             current_tasks.append({**t, "id": str(uuid.uuid4()), "target_time": get_next_iso_time(t['target_time'], t['freq']), "status": "pending", "actual_time": None, "reason": "", "freq_current": t['freq_current']+1})
                                 save_tasks(current_tasks); st.session_state[reason_key] = False; st.rerun()
+                            if st.button("取消", key=f"back_{task['id']}"): st.session_state[reason_key] = False; st.rerun()
+
+                        # --- 狀態 2：顯示轉床選單 ---
+                        elif st.session_state.get(transfer_key, False):
+                            st.info("🔀 請指定轉入床位：")
+                            new_area = st.selectbox("選擇新分區", list(BED_MAP.keys()), key=f"n_area_{task['id']}")
+                            if new_area == "FRee (自行輸入)":
+                                new_bed_num = st.text_input("輸入新名稱/床號", key=f"n_text_{task['id']}")
+                                new_full_bed = f"【FRee】{new_bed_num}" if new_bed_num else ""
+                            else:
+                                new_bed_sel = st.selectbox("選擇新床號", BED_MAP[new_area], key=f"n_sel_{task['id']}")
+                                new_full_bed = f"【{new_area}】{new_bed_sel}床"
+                            
+                            if st.button("⭕ 確認轉床", key=f"conf_trans_{task['id']}", type="primary"):
+                                if not new_full_bed.strip() or new_full_bed == "【FRee】":
+                                    st.error("請完整填寫新床位！")
+                                else:
+                                    current_tasks = load_tasks()
+                                    for t in current_tasks:
+                                        if t['id'] == task['id']:
+                                            t['area'] = new_area
+                                            t['bed'] = new_full_bed
+                                    save_tasks(current_tasks)
+                                    st.session_state[transfer_key] = False
+                                    st.toast("🔀 轉床成功！")
+                                    st.rerun()
+                            if st.button("返回", key=f"c_trans_{task['id']}"): st.session_state[transfer_key] = False; st.rerun()
+
+                        # --- 狀態 3：顯示取消確認表單 ---
                         elif st.session_state.get(cancel_key, False):
                             if st.button("⭕ 確定取消", key=f"yes_{task['id']}", use_container_width=True):
                                 current_tasks = load_tasks(); [t.update({"status": "cancelled", "actual_time": datetime.datetime.now(tw_tz)}) for t in current_tasks if t['id'] == task['id']]
                                 save_tasks(current_tasks); st.session_state[cancel_key] = False; st.rerun()
                             if st.button("返回", key=f"no_{task['id']}", use_container_width=True): st.session_state[cancel_key] = False; st.rerun()
+                        
+                        # --- 預設：常規按鈕 ---
                         else:
                             if st.button("✅ 完成", key=f"d_{task['id']}", use_container_width=True):
                                 if diff_mins < -60 or diff_mins > 30: st.session_state[reason_key] = True; st.rerun()
@@ -264,6 +304,7 @@ with tab1:
                                             if t['freq'] in ISO_SCHEDULE and t.get('freq_current', 1) < t.get('freq_total', 99):
                                                 current_tasks.append({**t, "id": str(uuid.uuid4()), "target_time": get_next_iso_time(t['target_time'], t['freq']), "status": "pending", "actual_time": None, "reason": "", "freq_current": t['freq_current']+1})
                                     save_tasks(current_tasks); st.rerun()
+                            if st.button("🔀 轉床", key=f"trans_{task['id']}", use_container_width=True): st.session_state[transfer_key] = True; st.rerun()
                             if st.button("❌ 取消醫囑", key=f"c_{task['id']}", use_container_width=True): st.session_state[cancel_key] = True; st.rerun()
 
         if has_alert:
@@ -280,8 +321,8 @@ with tab_dash:
     else:
         m1, m2, m3 = st.columns(3)
         m1.metric("總待辦", len(active_tasks))
-        m2.metric("嚴重超時", sum(1 for t in active_tasks if (t['target_time'] - now_tw_val).total_seconds()/60 < -60))
-        m3.metric("下次更新", (now_tw_val + datetime.timedelta(milliseconds=refresh_ms)).strftime('%H:%M:%S'))
+        m2.metric("嚴重超時 (>1hr)", sum(1 for t in active_tasks if (t['target_time'] - now_tw_val).total_seconds()/60 < -60))
+        m3.metric("下次系統更新", (now_tw_val + datetime.timedelta(milliseconds=refresh_ms)).strftime('%H:%M:%S'))
         st.bar_chart(pd.Series([t.get('area','') for t in active_tasks]).value_counts())
 
 with tab2:
@@ -299,7 +340,15 @@ with tab3:
     if st.text_input("密碼", type="password") == "6155":
         done_ts = [t for t in st.session_state.tasks if t["status"] == "done"]
         if done_ts:
-            df = pd.DataFrame([{ "床號": t['bed'], "事項": t['task'], "目標": t['target_time'].strftime('%H:%M'), "實際": t['actual_time'].strftime('%H:%M'), "原因": t.get('reason','') } for t in done_ts])
+            total_done = len(done_ts)
+            on_time_count = sum(1 for t in done_ts if -30 <= (t["actual_time"] - t["target_time"]).total_seconds() / 60 <= 60)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("總完成 (不含取消)", f"{total_done} 件")
+            m2.metric("✅ 達標 (-30~+60分)", f"{on_time_count} 件")
+            m3.metric("🚨 異常執行時間", f"{total_done - on_time_count} 件")
+            m4.metric("🏆 達標率", f"{round((on_time_count/total_done)*100, 1)} %")
+            
+            df = pd.DataFrame([{ "床號": t['bed'], "事項": t['task'], "目標": t['target_time'].strftime('%H:%M'), "實際": t['actual_time'].strftime('%H:%M'), "達標": "是" if -30 <= (t['actual_time'] - t['target_time']).total_seconds()/60 <= 60 else "否", "原因": t.get('reason','') } for t in done_ts])
             st.dataframe(df, use_container_width=True)
             st.download_button("📥 下載報表", df.to_csv(index=False).encode('utf-8-sig'), "ER_Log.csv")
             if st.button("🗑️ 清空資料 (交班使用)", type="primary"): save_tasks([]); st.rerun()
